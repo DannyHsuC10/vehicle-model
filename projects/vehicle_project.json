@@ -1,0 +1,383 @@
+{
+  "schema": 2,
+  "vehicle": {
+    "name": "FSAE EV - four independent wheel motors (estimated)",
+    "curb_mass": 240.0,
+    "occupants": 80.0,
+    "wheelbase": 1.53,
+    "track_front": 1.25,
+    "track_rear": 1.24,
+    "cg_height": 0.3,
+    "front_fraction": 0.51,
+    "unsprung_front": 14.5,
+    "unsprung_rear": 14.5,
+    "unsprung_height_front": 0.23,
+    "unsprung_height_rear": 0.23,
+    "wheel_rate_front": 26000.0,
+    "wheel_rate_rear": 28000.0,
+    "motion_ratio_front": 1.0,
+    "motion_ratio_rear": 1.0,
+    "bell_ratio_front": 1.0,
+    "bell_ratio_rear": 1.0,
+    "damping_comp_front": 900.0,
+    "damping_reb_front": 1200.0,
+    "damping_comp_rear": 1000.0,
+    "damping_reb_rear": 1300.0,
+    "arb_front": 1000.0,
+    "arb_rear": 800.0,
+    "arb_motion_ratio_front": 0.85,
+    "arb_motion_ratio_rear": 0.8,
+    "camber_front": -1.5,
+    "camber_rear": -1.0,
+    "toe_front": 0.0,
+    "toe_rear": 0.0,
+    "cd": 0.9,
+    "frontal_area": 1.05,
+    "cla_front": 0.5,
+    "cla_rear": 0.6,
+    "rho": 1.225,
+    "tire_diameter_front": 0.4,
+    "tire_diameter_rear": 0.4,
+    "tire_width_front": 0.195,
+    "tire_width_rear": 0.195,
+    "pressure_front": 80000.0,
+    "pressure_rear": 80000.0,
+    "mu_lat": 1.8,
+    "mu_long": 1.6,
+    "load_sensitivity": 0.15,
+    "camber_sensitivity": 0.025,
+    "reference_tire_load": 1000.0,
+    "tire_b": 8.0,
+    "tire_c": 1.3,
+    "tire_e": -1.0,
+    "brake_front": 0.58,
+    "motor_curve_csv": "input_data/motor_speed_vs_torque.csv",
+    "reduction_front": 11.2,
+    "reduction_rear": 11.2,
+    "reduction_efficiency_front": 0.97,
+    "reduction_efficiency_rear": 0.97,
+    "rolling_coefficient": 0.015
+  },
+  "geometry": {
+    "types": {
+      "front": "double_wishbone",
+      "rear": "double_wishbone"
+    },
+    "corners": {
+      "FL": {
+        "UFI": [
+          0.14,
+          0.27999999999999997,
+          0.3482
+        ],
+        "URI": [
+          -0.17,
+          0.27999999999999997,
+          0.38270000000000004
+        ],
+        "UBJ": [
+          -0.020483902075411373,
+          0.52,
+          0.35
+        ],
+        "LFI": [
+          0.18,
+          0.25999999999999995,
+          0.11000000000000001
+        ],
+        "LRI": [
+          -0.18,
+          0.25999999999999995,
+          0.13
+        ],
+        "LBJ": [
+          0.008,
+          0.5549999999999999,
+          0.1
+        ],
+        "ROD_IN": [
+          -0.11,
+          0.25999999999999995,
+          0.195
+        ],
+        "ROD_OUT": [
+          -0.115,
+          0.5449999999999999,
+          0.185
+        ]
+      },
+      "FR": {
+        "UFI": [
+          0.14,
+          -0.27999999999999997,
+          0.3482
+        ],
+        "URI": [
+          -0.17,
+          -0.27999999999999997,
+          0.38270000000000004
+        ],
+        "UBJ": [
+          -0.020483902075411373,
+          -0.52,
+          0.35
+        ],
+        "LFI": [
+          0.18,
+          -0.25999999999999995,
+          0.11000000000000001
+        ],
+        "LRI": [
+          -0.18,
+          -0.25999999999999995,
+          0.13
+        ],
+        "LBJ": [
+          0.008,
+          -0.5549999999999999,
+          0.1
+        ],
+        "ROD_IN": [
+          -0.11,
+          -0.25999999999999995,
+          0.195
+        ],
+        "ROD_OUT": [
+          -0.115,
+          -0.5449999999999999,
+          0.185
+        ]
+      },
+      "RL": {
+        "UFI": [
+          -1.4100000000000001,
+          0.27999999999999997,
+          0.3109
+        ],
+        "URI": [
+          -1.72,
+          0.27999999999999997,
+          0.4152
+        ],
+        "UBJ": [
+          -1.542872668170399,
+          0.52,
+          0.35
+        ],
+        "LFI": [
+          -1.37,
+          0.25999999999999995,
+          0.11000000000000001
+        ],
+        "LRI": [
+          -1.73,
+          0.25999999999999995,
+          0.13
+        ],
+        "LBJ": [
+          -1.542,
+          0.5549999999999999,
+          0.1
+        ],
+        "ROD_IN": [
+          -1.6600000000000001,
+          0.25999999999999995,
+          0.195
+        ],
+        "ROD_OUT": [
+          -1.665,
+          0.5449999999999999,
+          0.185
+        ]
+      },
+      "RR": {
+        "UFI": [
+          -1.4100000000000001,
+          -0.27999999999999997,
+          0.3109
+        ],
+        "URI": [
+          -1.72,
+          -0.27999999999999997,
+          0.4152
+        ],
+        "UBJ": [
+          -1.542872668170399,
+          -0.52,
+          0.35
+        ],
+        "LFI": [
+          -1.37,
+          -0.25999999999999995,
+          0.11000000000000001
+        ],
+        "LRI": [
+          -1.73,
+          -0.25999999999999995,
+          0.13
+        ],
+        "LBJ": [
+          -1.542,
+          -0.5549999999999999,
+          0.1
+        ],
+        "ROD_IN": [
+          -1.6600000000000001,
+          -0.25999999999999995,
+          0.195
+        ],
+        "ROD_OUT": [
+          -1.665,
+          -0.5449999999999999,
+          0.185
+        ]
+      }
+    }
+  },
+  "settings": {
+    "step": {
+      "step_mm": 25.0,
+      "duration": 2.0,
+      "speed_kmh": 60.0,
+      "use_geometry": true,
+      "rc_front_mm": 40.0,
+      "rc_rear_mm": 50.0,
+      "aero_on": false,
+      "estimate": true,
+      "overlay": true,
+      "closed": true,
+      "anti_on": true
+    },
+    "damper": {
+      "c_low": 6480.0,
+      "c_high": 1296.0,
+      "c_knee": 0.05,
+      "r_low": 8640.0,
+      "r_high": 1728.0,
+      "r_knee": 0.05,
+      "b_c_low": 7200.0,
+      "b_c_high": 1440.0,
+      "b_c_knee": 0.05,
+      "b_r_low": 9360.0,
+      "b_r_high": 1872.0,
+      "b_r_knee": 0.05,
+      "end": 0.3,
+      "use_geometry": true,
+      "rc_front_mm": 40.0,
+      "rc_rear_mm": 50.0,
+      "aero_on": false,
+      "estimate": true,
+      "overlay": true,
+      "closed": true,
+      "anti_on": true
+    },
+    "geometry": {
+      "heave_mm": 0.0,
+      "roll_deg": 0.0,
+      "pitch_deg": 0.0,
+      "sweep_mm": 40.0,
+      "use_geometry": true,
+      "rc_front_mm": 40.0,
+      "rc_rear_mm": 50.0,
+      "aero_on": false,
+      "estimate": true,
+      "overlay": true,
+      "closed": true,
+      "anti_on": true
+    },
+    "steering": {
+      "rack_mm": 0.0,
+      "rear_percent": 0.0,
+      "sweep_rack_mm": 20.0,
+      "ax_g": 0.0,
+      "ay_g": 0.0,
+      "use_geometry": true,
+      "rc_front_mm": 40.0,
+      "rc_rear_mm": 50.0,
+      "aero_on": false,
+      "estimate": true,
+      "overlay": true,
+      "closed": true,
+      "anti_on": true
+    },
+    "roll": {
+      "ay_g": 1.0,
+      "radius": 20.0,
+      "use_geometry": true,
+      "rc_front_mm": 40.0,
+      "rc_rear_mm": 50.0,
+      "aero_on": false,
+      "estimate": true,
+      "overlay": true,
+      "closed": true,
+      "anti_on": true
+    },
+    "distribution": {
+      "ay_g": 1.0,
+      "radius": 20.0,
+      "use_geometry": true,
+      "rc_front_mm": 40.0,
+      "rc_rear_mm": 50.0,
+      "aero_on": false,
+      "estimate": true,
+      "overlay": true,
+      "closed": true,
+      "anti_on": true
+    },
+    "aero": {
+      "speed_kmh": 80.0,
+      "max_speed_kmh": 140.0,
+      "chord": 0.22,
+      "span": 1.1,
+      "angle": 8.0,
+      "camber": 2.0,
+      "camber_at": 40.0,
+      "thickness": 12.0,
+      "position": 108.0,
+      "cl": 0.8,
+      "wing_cd": 0.06,
+      "use_geometry": true,
+      "rc_front_mm": 40.0,
+      "rc_rear_mm": 50.0,
+      "aero_on": false,
+      "estimate": true,
+      "overlay": true,
+      "closed": true,
+      "anti_on": true
+    },
+    "rigid": {
+      "ax_g": 1.0,
+      "ay_g": 1.0,
+      "use_geometry": true,
+      "rc_front_mm": 40.0,
+      "rc_rear_mm": 50.0,
+      "aero_on": false,
+      "estimate": true,
+      "overlay": true,
+      "closed": true,
+      "anti_on": true
+    },
+    "lap": {
+      "step_m": 1.0,
+      "start_kmh": 0.0,
+      "torque_percent": 100.0,
+      "grip_percent": 100.0,
+      "use_geometry": true,
+      "rc_front_mm": 35.0,
+      "rc_rear_mm": 40.0,
+      "aero_on": true,
+      "estimate": true,
+      "overlay": true,
+      "closed": true,
+      "anti_on": true
+    },
+    "track": [
+      {
+        "length_m": 57.33406592801372,
+        "radius_m": 9.125,
+        "grade_percent": 0
+      }
+    ],
+    "track_name": "定圓 9.125 m"
+  }
+}

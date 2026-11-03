@@ -1,0 +1,3 @@
+# Tkinter is supplied by the Python installer. SciPy / Matplotlib are not needed.
+numpy>=1.24
+Pillow>=10.0

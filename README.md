@@ -1,89 +1,231 @@
-# MPCC
-Simulation environments in C++ and Matlab of the Model Predictive Contouring Controller (MPCC) for Autonomous Racing developed by the Automatic Control Lab (IfA) at ETH Zurich
+# Vehicle Lab — FSAE 四馬達電動車離線設計工具
 
-## Formulation
+另有獨立的 **Suspension Lab 懸吊幾何工作台**：雙擊 `Start-SuspensionLab.bat`，整合 `new/static` 的完整靜態構造與 FV / SV / WE3D 運動分析，參數以 JSON 專案保存。操作、座標定義與模型適用範圍見 [Suspension Lab 說明](suspension_lab/README.md)。
 
-The MPCC is a model predictive path following controller which does follow a predefined reference path X^ref and Y^ref. This is achieved by augmenting the system with an integrator stated theta which approximates the progress along the reference path. The theta state is coupled to the real dynamics using the lag error e^l which is penalized in the cost. Additionally, the contouring error (lateral error to the reference path) is also penalized in the cost function. Finally, the progress along the reference path is maximized to achieve that the car does follow the path as fast as possible and the rate of the inputs is penalized. To guarantee that the car stays within the track, track constraints are imposed as well as bounds on all states, inputs, and the rate of inputs. The resulting optimization problem is shown in the following equation:
-<img src="https://github.com/alexliniger/MPCC/blob/master/Images/NMPCC_problem.jpg" width="700" />
+以 Motomathics 九個公開工具頁的工程功能為起點，收斂成 **FSAE 四輪四馬達、固定減速比、雙 A 臂懸吊** 的本地桌面工具。使用 Python 與 Tkinter，計算不連網、不需帳號。介面為繁體中文，圖表與結果欄位採常見英文工程名稱。支援 Python 3.10 以上，已於 Windows / Python 3.12 驗證。
 
-The vehicle dynamics considered is a bicycle model with nonlinear magic formula tire models:
-<img src="https://github.com/alexliniger/MPCC/blob/master/Images/Model.jpg" width="700" />
+## 啟動
 
-with the tire model and drive train model given as follows:
-<img src="https://github.com/alexliniger/MPCC/blob/master/Images/TireModel.jpg" width="700" />
+在此資料夾雙擊 **Start-VehicleLab.bat**，或在終端執行：
 
-Finally, the state and inputs of the problem are given as follows:
-<img src="https://github.com/alexliniger/MPCC/blob/master/Images/state-input.jpg" width="700" />
+```powershell
+python run.py
+# 或
+python -m vehicle_lab
+```
 
-Where (X,Y) is the global position phi the heading of the car, v_x, and v_y the longitudinal respectively the lateral velocity and omega the yaw rate. Theta is the augmented state which approximates the progress. The inputs are the duty cycle d to the drive train, the steering angle delta and the velocity along the reference path v_theta (which is an approximation of the velocities projected onto the path)
+核心與桌面介面不需 pip 套件。Windows 官方 Python 安裝時請保留 **Tcl/Tk and IDLE**。啟動腳本會依序找專案虛擬環境、本機 Codex Python，以及系統 Python。若 PowerShell 的本機政策阻擋 .ps1，直接以 `python run.py` 啟動即可，無須變更系統政策。
 
-To achieve obstacle avoidance of other cars, before solving the MPCC problem grid search 1-D dynamic programming approach finds the best way to avoid the obstacles. This path is then converted into a corridor which modifies the track constraint. 
+## 完整計算文件
 
-Finally, to solve the MPCC problem, we approximate the nonlinear problem as a time-varying quadratic program, by linearizing and discretizing the dynamics, approximating the lag and contouring errors using a first order Taylor approximation and approximating the track constraints with two linear half space aligned with the boundaries. The resulting quadratic program is then solved using [hpipm](https://github.com/giaf/hpipm), however, the Matlab implementation also offers a Yalmip, CVX, and direct QuadProg interface.
+詳盡的 LaTeX 方程式、符號、單位、數值求解與實作流程放在 [計算說明](計算說明/README.md)。建議從 [整體相依性](計算說明/00_總覽與計算相依性.md) 開始，再按模組閱讀；[函式索引](計算說明/13_方程式與程式函式索引.md) 可直接定位原始碼，最新測試範圍與結果見 [驗證結果](計算說明/14_驗證結果與適用範圍.md)。
 
-Note that the C++ implementation has some additional features proposed in the following paper [AMZ Driverless: The Full Autonomous Racing System](https://arxiv.org/abs/1905.05150). However, obstacle avoidance is currently only supported in the Matlab implementation.
+**PNG 匯出**是選用功能，需要 Pillow；目前這台電腦的 Codex Python 已有此套件。其他機器若缺少，可執行：
 
-For more details see our paper [Optimization‐based autonomous racing of 1:43 scale RC cars](https://onlinelibrary.wiley.com/doi/abs/10.1002/oca.2123) or the [Arxiv](https://arxiv.org/abs/1711.07300) version.
+```powershell
+python -m pip install -r requirements-optional.txt
+```
 
-## How to run
-See the individual instruction for the C++ and Matlab code in the respective folders.
+SVG、CSV、HTML 報告與 CAD 匯出均不依賴 Pillow。HTML 報告用瀏覽器開啟後按「列印 / 另存 PDF」。
 
-## Example
-<img src="https://github.com/alexliniger/MPCC/blob/master/Images/MPC_sim.gif" width="700" />
+## 建議操作順序
 
-## Papers
-If you use the C++ or Matlab code please cite 
-- [Optimization‐based autonomous racing of 1:43 scale RC cars](https://onlinelibrary.wiley.com/doi/abs/10.1002/oca.2123)
+1. 開啟 `examples/fsae_example.json`。預設車輛是 **FSAE 工程起點估計值**，請以實車數據取代；不再提供乘用房車範例。
+2. 按「共用車輛設定」，修改質量、尺寸、輪胎、空力、阻尼、前後減速比與減速效率；馬達能力直接讀取 `input_data/motor_speed_vs_torque.csv`。
+3. 編輯四角雙 A 臂硬點與轉向拉桿；前後懸吊均固定為雙 A 臂，不再選擇其他型態。硬點 CSV 的座標單位為 mm。
+4. 在所需分頁修改輸入後按「計算」或 **F5**。切換分頁時會計算尚未更新的結果。
+5. 在圖表上滾輪縮放、拖曳平移；立體幾何圖拖曳為旋轉，雙擊重設。
+6. 保存專案 JSON，會包含共用車輛、所有硬點、九個工具輸入與自訂賽道。`Ctrl+S` 儲存，`Ctrl+O` 開啟。
 
-and if you use the C++ version please also
-- [AMZ Driverless: The Full Autonomous Racing System](https://arxiv.org/abs/1905.05150)
+「懸吊幾何」與「側傾」的幾何圖提供 **車身隨動（輪胎貼地）** 勾選選項。勾選後再按「播放」，綠色車架與懸吊硬點會隨車身姿態移動，灰色地面保持固定；取消勾選可回到原本的輪胎行程預覽。停止後回到目前計算的姿態，播放中也可切換模式。幾何頁沿已計算的升降、側傾與俯仰姿態疊加跳動掃描；側傾頁繞該次計算的 roll axis 左右擺動。此顯示假設剛性車身與平坦路面，以理想輪胎中心圓接地、定長連桿求姿態，屬準靜態示意，不增加瞬態或抬輪模型；勾選狀態只影響顯示。
 
-## Related Papers for the interested reader
-### Optimization‐based autonomous racing of 1:43 scale RC cars
-Liniger, A., Domahidi, A. and Morari, M.  
-Optimization‐based autonomous racing of 1: 43 scale RC cars.  
-Optimal Control Applications and Methods, 2015, 36(5), pp.628-647. 
+同一種設定子視窗只會開啟一個；再次點擊會將既有視窗帶回前景，保留尚未套用的內容。車輛參數的雙擊編輯也一次只開一個，關閉後即可編輯下一項。
 
+「懸吊幾何」、「轉向」與「側傾」的圖表上方提供兩個獨立勾選欄位，預設開啟，可立即切換，不需重新計算；設定會隨專案 JSON 儲存：
 
-Explains the MPCC problem for autonomous racing and the obstacle avoidance approach, as described above.
+- **Projection lines（投影線）**：上、下 A 臂平面朝瞬心延伸的點畫線，以及接地點至瞬心的點線。前／後視圖顯示該軸的前視投影（用於 RC），側視圖顯示側視投影（用於幾何 anti），立體圖同時顯示兩組；俯視圖不繪製這類平面投影線。
+- **Kingpin lines（主銷軸線）**：穿過上、下球接點並延伸至目前接地高度的粉紅色虛線，用來觀察 KPI、caster 與轉向軸落點。
 
-### Efficient implementation of randomized MPC for miniature race cars
-Carrau, J.V., Liniger, A., Zhang, X. and Lygeros, J.  
-Efficient implementation of randomized MPC for miniature race cars.  
-2016 European Control Conference (ECC).
+特徵線會跟隨跳動、轉向、側傾及車身隨動動畫更新，SVG／PNG 與報告圖保留當前顯示。瞬心可能位於很遠處，線條會裁切在視野邊界，不影響車輛的自動縮放；可縮放、平移查看延伸方向。平行或退化的投影不繪製不存在的有限交點。特徵線只影響顯示與圖像匯出，STL／STEP 仍匯出實際連桿。
 
+圈速頁的測試賽道提供 **半徑 9.125 m 的定圓**與 **75 m 直線（開放起點）**；定圓一圈長度為 $2\pi\times9.125\approx57.334065928$ m。示範 Autocross 與 GP 仍可選擇。
 
-Shows how to implement an efficient sampling based randomized MPC approach using the MPCC approach. First, the track constraints can be reformulated as chance constraints and approximated using randomized MPC. We then show that the problem can be split in a constraint tightening pre-processing step and solving a deterministic MPC problem with tight-end constraints. The advantage of this two step approach is that it only causes an overhead in the order of few milliseconds.
+**軸距、輪距或輪胎直徑改變時，硬點不會自動縮放。** 請同步調整座標，或在硬點編輯器按「重設硬點」建立與新尺寸相符的示範幾何。此動作會替換編輯器中的座標；按「套用」才寫入共用車輛。
 
-### Racing miniature cars: Enhancing performance using stochastic MPC and disturbance feedback
-Liniger, A., Zhang, X., Aeschbach, P., Georghiou, A. and Lygeros, J.  
-Racing miniature cars: Enhancing performance using stochastic MPC and disturbance feedback.  
-2017 American Control Conference (ACC).
+## 九個工具
 
+| 分頁 | 已實作功能 |
+| --- | --- |
+| 階躍響應 | 前後單自由度模型、壓縮/回彈獨立阻尼、後軸時間延遲、自然頻率、臨界阻尼、阻尼比、超越量、2% 安定時間、頻率傳遞率、前後頻率同步、減震器係數傳送 |
+| 阻尼曲線 | 連續雙線性曲線、壓縮/回彈各自低速/高速/拐點、A/B 疊圖、輪端/桿端係數換算、從階躍載入或寫回 |
+| 懸吊幾何 | 前後雙 A 臂；四角硬點、左右鏡射、跳動/側傾/俯仰、camber/caster/toe/RC 行程曲線、幾何 anti、RC/anti 目標反求、五個視角與跳動播放 |
+| 轉向 | 前後拉桿、後輪轉向比例、定長拉桿齒條掃描/播放、Ackermann 比、camber vs steer、bump steer、scrub/trail 目標、轉向軸力矩與拉桿力估計 |
+| 側傾 | 輪端剛性、防傾桿、簧上重心與 roll axis、側傾梯度、前後剛性分配、輪荷/抬輪診斷、camber/toe/RC vs roll 及幾何視圖 |
+| 載重轉移分配 | 簧下/幾何/彈性三路徑力矩、前後 LLTD、輪荷與抓地損失、Magic Formula 上升支滑角、穩態轉向量與不足轉向梯度 |
+| 空氣力學 | CdA 阻力及功率、前後 ClA 下壓、姿態高度、空氣密度、NACA 類型翼截面、有限翼展升阻估算或手動係數、翼位置前後軸分力 |
+| 剛體載重轉移 | 加速/煞車/橫向輪荷、各軸轉移量、接地面積與橢圓、抬輪提示 |
+| 圈速 | 自訂分段/中心線 CSV、示範課程、封閉圈或開放起點、CSV 馬達轉速/扭矩、前後固定減速比、逐輪獨立限扭、載重敏感性/摩擦橢圓、空力、坡度、滾阻、速度/前後馬達 RPM/輪扭矩/姿態與敏感度 |
 
-Similar to the previous paper, the MPCC is augmented with probabilistic track constraints, and we show that it is beneficial to optimize over the feedback policies used in stochastic MPC, using the disturbance feedback approach. We also show that by using only 3 samples, the approach can be implemented in real-time and that even when using so few samples, it helps on the experimental platform.
+所有工具提供完整結果與所選曲線 CSV、SVG、選用 PNG 及輸入快照 HTML 報告。幾何、轉向與側傾另提供 **STL 連桿示意**和 **STEP 線框**。STEP 為 ISO 10303-21 / AP214 幾何曲線集合，STL 為圓柱連桿三角網格；均以 mm 輸出，**不是可直接製造的實體零件**。CAD 檔的結構已檢查，尚未經第三方 CAD 核心開啟驗證。
 
-### Cautious NMPC with Gaussian process dynamics for autonomous miniature race cars
-Hewing, L., Liniger, A. and Zeilinger, M.N.  
-Cautious NMPC with Gaussian process dynamics for autonomous miniature race cars.  
-2018 European Control Conference (ECC).
+## 單位與正負號
 
+- 計算核心使用 kg、m、s、N、Pa、rad。介面標示 mm、km/h、deg 時才換算。
+- `front_fraction` / `brake_front` / `reduction_efficiency_front/rear` 為 0–1 比例，並非 0–100 百分比；減速效率取 $0<\eta\le1$。
+- 空間座標：**x 向前、y 向車輛左側、z 向上**；前軸 x=0，後軸 x=-wheelbase。此座標約定與原站不同，匯入硬點前請轉換。
+- 正橫向 g = 左轉，右輪增加負載。剛體與轉向頁正縱向 g = 煞車。圈速資料中的 `long_g` 為物理加速度，**正值表示加速**。
+- 正跳動 = 輪胎相對車身向上；正 camber = 輪胎上緣向外；正 toe = 每輪內八。
+- 正齒條位移 = 向車輛左側。`steer_deg` 依 x/y 平面定義，正值為輪胎向左轉。
+- `MR = wheel travel / spring travel`，總運動比為懸吊比乘搖臂比。
+- 防傾桿輸入為 **N·m/rad**；轉成 N·m/deg 要乘 π/180。不要直接填入原站顯示的 N·m/deg 數字。
+- `ΔF` 是從內輪轉到外輪的力；外輪與內輪的差為 **2ΔF**。
+- 幾何不可達、輪胎飽和或模擬時間內未安定時，顯示空值 `—`，並不代表零。
 
-This paper proposes to learn the model mismatch between the real car and the MPC model using Gaussian Processes (GP). The GP is then considered when solving the MPC problem which helps to improve the performance. Furthermore, is the uncertainty in the GP considered by using probabilistic track constraints. The approach shows good results in simulation when the simulation model had a severe model mismatch.
+## 計算方法
 
-### Learning-based model predictive control for autonomous racing
-Kabzan, J., Hewing, L., Liniger, A. and Zeilinger, M.N.  
-Learning-based model predictive control for autonomous racing.  
-IEEE Robotics and Automation Letters, 2019, 4(4), pp.3363-3370.
+### 階躍、阻尼與剛性
 
+每角簧上質量由軸荷扣除該軸簧下質量，再除以二。`fn = sqrt(kw/ms)/(2π)`、`ccrit = 2 sqrt(kw ms)`。本版面向四輪車；沒有摩托車半車模式。
 
-This paper uses the previous paper as a basis but implements the approach on the AMZ Formula Student car. Additionally, online learning is implemented using a dictionary that is automatically updated based on how informative a data point is for the GP. The approach was tested on the real Formula Student car and reduced the lap time by 10% once the GP dictionary had converged.
+自然頻率換算會固定現有彈簧剛性，重算輪端剛性與運動比。「前後同步」使前後自然頻率與阻尼比相同；實際路面到達時間仍相差 `L/v`。
 
-### AMZ Driverless: The Full Autonomous Racing System
-Kabzan, J., et. al.  
-AMZ Driverless: The Full Autonomous Racing System.  
-arXiv preprint arXiv:1905.05150, 2019.
+階躍採 `m x'' + c x' + k(x - road) = 0`，階躍到達時車身位移與速度為零；理想路面速度脈衝不納入。壓縮/回彈依相對行程速度選擇，RK4 會按剛性自動細分步長。頻率傳遞率使用前後各自的平均阻尼比，屬線性近似。
 
+桿端阻尼 `cshaft = cwheel × MR²`。雙線性曲線在拐點連續：`F = cLS min(v,vknee) + cHS max(0,v-vknee)`。此處採工程符號壓縮正、回彈負，並非減震器對車身作用力方向。
 
-This paper explains the full system used in the AMZ Driverless car for the 2017 and 2018 seasons. This also includes the MPCC including new features added in the C++ implementation of this GitHub repo, mainly the tire constraints and side slip angle cost. However, the paper also proposes an interesting mixed kinematic-dynamic model, which allows to get the benefits of kinematic models at slow speeds and the accuracy of dynamic models at high speeds.
+### 三維幾何與轉向
 
+雙 A 臂以剛性輪座的 6 個位姿未知數，約束四條 A 臂支線、定長拉桿與接地點行程。採數值 Jacobian、阻尼最小平方與線搜尋；無解不強行外推。前後各角都使用同一種雙 A 臂模型。
+
+輪胎以三個等直徑圓環呈現 3D 線框：保留輪胎中心圓，沿輪軸方向在兩側各半個胎寬處增加圓環。前後輪分別使用 `tire_width_front`、`tire_width_rear`，圓環隨轉向、外傾與懸吊行程同步移動。
+
+雙 A 臂 roll center 由前視瞬心與接地點連線求交。幾何 anti-dive 在 CG 縱向位置評估，anti-squat 在前軸位置評估，均為接地點至側視瞬心的高度/CG 高，**沒有套入煞車力路徑、輪邊減速機反力矩或 compliance**。
+
+轉向頁壓力對力矩的影響僅透過估算氣動 trail。直線煞車沒有橫向力，所以改胎壓不改變橫向相關的轉向力矩。
+
+### 側傾與三路徑載重轉移
+
+`Kspring = kw t² / 2`，加上防傾桿得到各軸總側傾剛性。簧上重心由總重心扣除簧下質量力矩求得；roll axis 高度依前後簧上質量加權。
+
+- 簧下路徑：`mu ay hu`。
+- 幾何路徑：各軸 `ms ay hRC`。
+- 彈性路徑：`ms,total ay (hs - haxis)`，按前後總側傾剛性比例分配。
+
+三路徑總力矩等於 `m ay hCG`；各軸轉移為力矩除以輪距。roll axis 只用一次，不再次折減剛性。簧下質量只需輸入前、後各一個**每輪 kg**，同軸左右相同，每軸總簧下質量為輸入的兩倍；靜態四輪法向力採左右各半，尚無靜態交叉配重 / 各角秤重。
+
+輪胎最大力使用 `μ Fz max(0.05, 1 - sensitivity(Fz/Fref-1))`；圈速額外使用簡化 camber 損失。穩態滑角只取 Magic Formula 的穩定上升支，超出峰值顯示飽和。沒有實測輪胎資料時，μ、參考負載、敏感性及 B/C/E 都是估計。
+
+### 空力與圈速
+
+`Fdrag = 0.5 ρ v² Cd A`，`P = Fdrag v`；車身下壓 `0.5 ρ v² ClA`。翼面係數由薄翼理論、展弦比及誘導阻力估算，無失速、地效或 CFD。姿態用每軸兩個輪端彈簧承受下壓估算，不含前後耦合或限位塊。
+
+圈速沿中心線切成空間小段，先算輪胎橫向上限，再前向加速、反向煞車反覆收斂。彎道邊界同時採用前後相鄰段的較低限速，封閉圈要求起終點速度相同。輪胎使用三路徑橫向載重、加速/煞車縱向轉移、前後液壓煞車比例與摩擦橢圓。每一輪獨立取馬達上限與該輪輪胎上限的較小值，再合成整車驅動力；沒有差速器的左右輪耦合。
+
+電動車使用前後各一組固定減速比，沒有選檔、換檔時間或自然進氣功率密度修正。空氣密度只影響阻力與下壓；煞車模型為液壓摩擦煞車，沒有額外假設再生煞車。示範分段只供測試，非原站賽道資料庫。自訂封閉圈會封閉**速度邊界**，不會強制修補分段地圖的幾何閉合。
+
+### 四馬達 CSV 查表到輪扭矩
+
+`input_data/motor_speed_vs_torque.csv` 的 `speed` 為 **馬達 RPM**，`torque` 為 **單顆馬達 Nm**。同一份表提供四顆馬達的能力，前左右共用前減速比，後左右共用後減速比。對軸 $a\in\{f,r\}$：
+
+$$
+n_{w,a}=\frac{V}{r_a}\frac{60}{2\pi},\qquad n_{m,a}=g_an_{w,a},
+$$
+
+$$
+T_{m,lookup,a}=\operatorname{interp}_{CSV}(n_{m,a}),\qquad
+T_{m,a}=s_T\max(0,T_{m,lookup,a}),
+$$
+
+$$
+T_{w,a}=T_{m,a}g_a\eta_a,\qquad F_{m,a}=\frac{T_{w,a}}{r_a}.
+$$
+
+$g_a$ 為減速比（馬達轉速/輪轉速），$\eta_a$ 為減速效率，$s_T=\texttt{torque\_percent}/100$（預設 1）；$T_{w,a}$ 與 $F_{m,a}$ 都是**該軸單輪**的值。整車未受抓地限制的能力為 $2F_{m,f}+2F_{m,r}$。實際加速則逐輪計算 $\sum_i\min(F_{m,i},F_{x,\mathrm{tire},i})$。
+
+資料在每次圈速計算開始時讀取一次並凍結。表內採線性插值，超過 CSV 最大 RPM 時扭矩歸零，不向高速端外插；路徑相對於工具根目錄解析。前後輪 RPM 限制會共同決定允許車速，避免任何一軸馬達超速。
+
+提供的 CSV 有一個約 18,296.593 RPM / -0.031845 Nm 的小負值；工具保留原始資料，先以原值插值，再截零並乘扭矩倍率作最大驅動扭矩。這不代表加入再生煞車。圈速摘要記錄 CSV 來源、SHA-256、列數與負樣本數，以辨識該次使用的曲線。詳細分支、CSV 驗證與圈速解法見第 11 章。
+
+### FSAE 預設車輛
+
+| 項目 | 起始估計值 |
+| --- | ---: |
+| 不含駕駛車重 / 駕駛 | 250 / 75 kg（總重 325 kg） |
+| 軸距 / 前後輪距 | 1.55 / 1.20 m |
+| 整車重心高 / 前重比例 | 0.27 m / 48% |
+| 前輪 / 後輪每輪簧下質量 | 9 / 9 kg，同軸左右共用，應包含輪邊馬達/減速機的實際簧下部分 |
+| 前後輪端剛性 | 26,000 / 28,000 N/m |
+| 前後總運動比 | 1.20 / 1.20 |
+| 前後輪外徑 / 胎寬 | 0.46 / 0.18 m |
+| 前後胎壓 | 80 kPa（共用欄位以 80,000 Pa 儲存） |
+| 前/後減速比與效率 | 12.0 / 12.0，效率各 0.97 |
+| 車身 Cd / 正面面積 | 0.90 / 1.05 m² |
+| 前後車身 ClA | 0.50 / 0.60 m² |
+
+這些值只用於可執行的 FSAE 設計起點，沒有宣稱是任何車隊的量測值；馬達能力則直接來自提供的 CSV。
+
+既有 schema 2 FSAE 專案仍可讀取；若存有舊四角簧下質量，讀入時依前、後軸各取左右平均，保留每軸總量，之後只保存 `unsprung_front` / `unsprung_rear` 兩個欄位。舊引擎版 schema 1 仍不支援。
+
+各頁初次開啟的主要輸入如下；載入專案後會改用該專案保存的輸入。
+
+| 頁面 | 初始輸入 |
+| --- | --- |
+| 階躍 | 25 mm、2 s、60 km/h |
+| 阻尼 | A 前軸、B 後軸，最高桿速 0.3 m/s；詳細斜率見第 03 章 |
+| 幾何 / 轉向 | 行程掃描 ±40 mm / 齒條掃描 ±20 mm |
+| 側傾 / 分配 | 1g、半徑 20 m、從雙 A 臂幾何取得 RC、空力關閉 |
+| 空力 | 80 km/h，速度掃描至 140 km/h |
+| 剛體轉移 | 煞車 1g、左轉 1g |
+| 圈速 | 空間步長 2 m、馬達扭矩與抓地倍率各 100%、空力開啟 |
+
+## 與 Motomathics 的關係及差異
+
+功能研究日期為 2026-10-29。參考頁：
+
+- https://www.motomathics.com/step-response
+- https://www.motomathics.com/dampers
+- https://www.motomathics.com/geometry
+- https://www.motomathics.com/steering
+- https://www.motomathics.com/roll
+- https://www.motomathics.com/transfer-distribution
+- https://www.motomathics.com/aero
+- https://www.motomathics.com/weight-transfer
+- https://www.motomathics.com/lap
+
+此工具為獨立實作，未打包原網站程式、視覺資產或賽道資料。**不是網站逐行移植或數值完全一致的複製品**。特別是階躍響應：原站公開程式的 400 點流程使用中介狀態及輸出轉換，本版使用已對照解析解的物理狀態方程；峰值及安定時間可能不同。幾何採一般三維約束解，翼阻力、接地形狀、氣動 trail、輪胎與圈速也有上述獨立假設。
+
+目前不包含原站的拖點建模、雲端帳號、真實賽道目錄或完整原生實體 CAD。硬點可在表格與 CSV 編輯；可旋轉/縮放幾何視圖。提供獨立 RC/anti 與 scrub/trail 反求器；不保證與原站的幾何重建策略相同。播放功能包括跳動/轉向/側傾預覽與曲線掃描線，並非原站的道路動畫。若要拿特定頁面作精確結果對照，請保留同一輸入快照，再逐項校準模型。
+
+## 程式化使用
+
+```python
+from vehicle_lab.models import Vehicle
+from vehicle_lab.geometry import default_geometry
+from vehicle_lab.workflows import defaults, run_tool
+
+vehicle = Vehicle()
+geometry = default_geometry(vehicle)
+options = defaults("aero")
+options["speed_kmh"] = 80
+result = run_tool("aero", vehicle, geometry, options)
+print(result["metrics"]["body_drag_N"])
+```
+
+核心檔案：`models.py` 共用資料；`motor.py` 馬達 CSV 與輪端能力；`physics.py` 力學；`geometry.py` 雙 A 臂三維幾何；`lap.py` 圈速；`workflows.py` 九個工具；`gui.py` 介面；`charts.py` 圖表；`export.py` 匯出。
+
+不開視窗也可批次計算並輸出結果與每條曲線：
+
+```powershell
+python -m vehicle_lab.cli all --project examples/fsae_example.json --output results
+python -m vehicle_lab.cli aero --set speed_kmh=100 --output results
+```
+
+「曲線 CSV」會匯出目前選擇圖表的每條數據線；「資料 CSV」匯出該工具的結果表。幾何硬點 CSV 在硬點編輯器匯出。防傾桿端剛性可在「頻率 / 彈簧換算」選 `arb_tip_rate`，由共用防傾桿運動比換算為側傾剛性。
+
+## 驗證
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+測試包括線性阻尼階躍解析解、雙線性拐點、空力速度縮放、輪荷/力矩守恆、雙 A 臂三維連桿長度、轉向、馬達 CSV 插值與超速、四顆馬達/逐輪限扭、封閉圈速度邊界、扭矩/抓地趨勢、專案與 CSV/CAD 匯出。這些驗證工程模型及程式一致性，**不代表實車校準或賽道圈速認證**。
