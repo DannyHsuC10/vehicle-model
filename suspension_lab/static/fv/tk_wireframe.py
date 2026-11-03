@@ -1,22 +1,17 @@
 """Interactive Tk Canvas preview of the static suspension's real wire geometry.
 
-Run from the repository root with ``python new/static/fv/tk_wireframe.py``.
+Run from the repository root with ``python -m suspension_lab.static.fv.tk_wireframe``.
 Only NumPy and Python's bundled Tkinter are required; no Matplotlib is loaded.
 """
 
 import itertools
 import math
-import sys
 import tkinter as tk
-from pathlib import Path
 from tkinter import ttk
-
-if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import numpy as np
 
-from static.fv.wireframe_geometry import build_wireframe_scene
+from .wireframe_geometry import build_wireframe_scene
 
 
 def project_points(points, azimuth, elevation):

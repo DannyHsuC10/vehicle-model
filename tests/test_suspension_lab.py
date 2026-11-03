@@ -5,6 +5,7 @@ import gc
 import math
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -19,13 +20,74 @@ from suspension_lab.project import default_project, load_project, save_project, 
 from suspension_lab.engine import Engine, Unreachable, contact_frame, to_contact_frame, rotate2
 from suspension_lab.analysis import calculate_mapping, make_plot, static_point_rows, PLOTS
 from suspension_lab.export import point_rows, write_report
-from static.fv.wireframe_geometry import build_wireframe_scene
+from suspension_lab.static.fv.wireframe_geometry import build_wireframe_scene
 
 TEST_TMP = Path(__file__).resolve().parents[1] / ".test-tmp"
 TEST_TMP.mkdir(exist_ok=True)
 
 
 class ProjectTests(unittest.TestCase):
+    def test_staged_app_runs_without_new_folder_or_legacy_imports(self):
+        source = '''
+import importlib.abc
+from pathlib import Path
+import runpy
+import sys
+
+root = Path.cwd()
+assert not (root / 'new').exists()
+sys.path.insert(0, str(root))
+
+class NoLegacy(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in ('static', 'suspension_geo', 'new'):
+            raise AssertionError('Legacy import: ' + fullname)
+sys.meta_path.insert(0, NoLegacy())
+search_path = sys.path.copy()
+
+from suspension_lab.project import default_project, load_project, save_project
+from suspension_lab.engine import Engine
+from suspension_lab.analysis import calculate_mapping, make_plot
+from suspension_lab.gui import App
+from suspension_lab.export import write_report
+from suspension_lab.static.fv.tk_wireframe import WireframeViewer
+
+project = default_project()
+project['analysis']['samples'] = 5
+save_project(root / 'project.json', project)
+engine = Engine(load_project(root / 'project.json'))
+states = {'front': engine.fv['front'].solve(-10, 20),
+          'rear': engine.fv['rear'].solve(15, -5),
+          'sv': engine.solve_sv(-10, 20), 'we': engine.solve_we(20)}
+for page, state in states.items():
+    assert state['metrics']
+    assert state['points']
+    assert make_plot(page, 'motion', state, engine=engine)
+    assert calculate_mapping(engine, page)['rows']
+assert make_plot('static', 'iso', engine=engine)['world_lines']
+assert sys.path == search_path
+for name, module in tuple(sys.modules.items()):
+    if name.split('.')[0] in ('suspension_lab', 'vehicle_lab'):
+        assert Path(module.__file__).resolve().is_relative_to(root), module.__file__
+
+sys.argv = ['suspension_lab', '--help']
+try:
+    runpy.run_module('suspension_lab', run_name='__main__')
+except SystemExit as error:
+    assert error.code == 0
+else:
+    raise AssertionError('CLI did not exit after --help')
+'''
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as tmp:
+            staged = Path(tmp)
+            for package in ("suspension_lab", "vehicle_lab"):
+                shutil.copytree(root / package, staged / package,
+                                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+            result = subprocess.run([sys.executable, "-I", "-B", "-c", source], cwd=staged,
+                                    capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_roundtrip_and_reject_nonfinite_unknown_and_fractional_grid(self):
         project = default_project()
         project["front"]["fvsa"] = .923

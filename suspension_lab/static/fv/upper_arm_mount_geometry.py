@@ -1,6 +1,6 @@
 """Extend front upper-arm rays to each FV pickup's vehicle lateral Y."""
 
-from static.fv.arm_mount_geometry import build_arm_mount_geometry, extend_arm_leg
+from .arm_mount_geometry import build_arm_mount_geometry, extend_arm_leg
 
 
 def extend_upper_arm_leg(UBJ, selected_point, target_y, *, tolerance=1e-12):

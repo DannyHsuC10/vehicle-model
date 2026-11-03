@@ -8,24 +8,24 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from static import Geometric_Analysis as ga
-from static import geometry as ge
-from static.analysis_settings import AnalysisSettings
-from static.car import Car, SuspensionF, SuspensionR
-from static.fv.arm_plane_geometry import build_arm_plane_geometry
-from static.fv.chassis_geometry import build_chassis_geometry
-from static.fv.circle_plane_intersections import (
+from .. import Geometric_Analysis as ga
+from .. import geometry as ge
+from ..analysis_settings import AnalysisSettings
+from ..car import Car, SuspensionF, SuspensionR
+from .arm_plane_geometry import build_arm_plane_geometry
+from .chassis_geometry import build_chassis_geometry
+from .circle_plane_intersections import (
     build_circle_plane_intersections, build_rear_circle_plane_intersections,
 )
-from static.fv.interference_geometry import build_interference_geometry
-from static.fv.kingpin_geometry import build_kingpin_geometry
-from static.fv.lower_arm_mount_geometry import build_lower_arm_mount_geometry
-from static.fv.rear_arm_mount_geometry import (
+from .interference_geometry import build_interference_geometry
+from .kingpin_geometry import build_kingpin_geometry
+from .lower_arm_mount_geometry import build_lower_arm_mount_geometry
+from .rear_arm_mount_geometry import (
     build_rear_lower_arm_mount_geometry, build_rear_upper_arm_mount_geometry,
 )
-from static.fv.upper_arm_mount_geometry import build_upper_arm_mount_geometry
-from static.fv.wheel_projection_geometry import build_axle_wheel_projection_geometry
-from static.sv.side_view_geometry import build_side_view_geometry
+from .upper_arm_mount_geometry import build_upper_arm_mount_geometry
+from .wheel_projection_geometry import build_axle_wheel_projection_geometry
+from ..sv.side_view_geometry import build_side_view_geometry
 
 
 VIEW_COLORS = {"front": "#0072b2", "rear": "#d55e00", "sv": "#009e73"}

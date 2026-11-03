@@ -2,10 +2,10 @@
 
 import numpy as np
 
-from static import geometry as ge
-from static import Geometric_Analysis as ga
-from static.car import Car, SuspensionF, SuspensionR
-from static.analysis_settings import AnalysisSettings
+from .. import geometry as ge
+from .. import Geometric_Analysis as ga
+from ..car import Car, SuspensionF, SuspensionR
+from ..analysis_settings import AnalysisSettings
 
 
 # Colors identify geometric feature types, not front/rear axles.

@@ -1,7 +1,7 @@
 """Backend-independent kinematics seeded exclusively by StaticWireframe.
 
-FV: the circle-intersection linkage of suspension_geo/Geometric_Analysis.py.
-SV: the fixed Au/Al tangent paths of suspension_geo/sv/sus_sv_v4.py.
+FV: circle-intersection linkage seeded by the package's static geometry.
+SV: fixed Au/Al tangent paths seeded by the same static geometry.
 WE: Rodrigues steering around the combined static FV/SV kingpin.
 No Matplotlib, SciPy, global mutable solvers, or car.py design defaults.
 """
@@ -11,8 +11,8 @@ import math
 import numpy as np
 
 from .project import static_objects
-from static.fv.wireframe_geometry import build_wireframe_scene
-from suspension_geo.we3D.wheel_end_geometry import rotation_matrix
+from .static.fv.wireframe_geometry import build_wireframe_scene
+from .wheel_end_geometry import rotation_matrix
 
 COLORS = {"upper": "#fbbf24", "lower": "#38bdf8", "upright": "#a78bfa",
           "wheel": "#e2e8f0", "ground": "#64748b", "kingpin": "#fb7185", "force": "#34d399"}

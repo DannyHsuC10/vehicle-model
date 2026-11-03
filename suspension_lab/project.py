@@ -3,15 +3,10 @@ import json
 import math
 import os
 from pathlib import Path
-import sys
 
 import numpy as np
 
-NEW_ROOT = Path(__file__).resolve().parents[1] / "new"
-if str(NEW_ROOT) not in sys.path:
-    sys.path.insert(0, str(NEW_ROOT))
-
-from static.car import Car, SuspensionF, SuspensionR
+from .static.car import Car, SuspensionF, SuspensionR
 
 DEFAULT_PATH = Path(__file__).with_name("default_project.json")
 

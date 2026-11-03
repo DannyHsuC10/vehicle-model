@@ -1,6 +1,6 @@
 """Extend rear A-arm rays through their clearance points to chassis lateral Y."""
 
-from static.fv.arm_mount_geometry import build_arm_mount_geometry
+from .arm_mount_geometry import build_arm_mount_geometry
 
 
 def build_rear_upper_arm_mount_geometry(rear_plane, kingpins, intersections):

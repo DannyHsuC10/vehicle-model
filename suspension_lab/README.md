@@ -1,6 +1,8 @@
 # Suspension Lab 懸吊幾何工作台
 
-本工具是獨立的五頁 Tkinter 桌面介面，沿用 Vehicle Lab 的 Canvas 圖表、平移縮放與匯出方法。完整靜態構造直接呼叫 `new/static/fv/wireframe_geometry.py`，與 `tk_wireframe.py` 使用相同來源。FV、SV 的運動零位均來自這份靜態結果；WE3D 使用其中合併 FV / SV 的真實 3D 主銷。
+本工具是獨立的五頁 Tkinter 桌面介面，沿用 Vehicle Lab 的 Canvas 圖表、平移縮放與匯出方法。完整靜態構造直接呼叫套件內的 `static/fv/wireframe_geometry.py`，與套件內的 `static/fv/tk_wireframe.py` 使用相同來源。FV、SV 的運動零位均來自這份靜態結果；WE3D 使用其中合併 FV / SV 的真實 3D 主銷。
+
+幾何程式已收進 `suspension_lab/static/`，輪端旋轉函式位於 `suspension_lab/wheel_end_geometry.py`；全部使用套件內 import，不再將 `new` 加入 Python 搜尋路徑，也不依賴其中任何 Python 檔案。移除 `new/static`、`new/suspension_geo` 或整個 `new` 資料夾不影響本工具。仍須保留共用圖表與匯出模組所在的 `vehicle_lab`。
 
 ## 啟動與參數操作
 
@@ -10,6 +12,8 @@
 python -m suspension_lab
 python -m suspension_lab --project projects/my_suspension.json
 ```
+
+獨立靜態線框預覽可雙擊 `Start-StaticWireframe.bat`，或執行 `python -m suspension_lab.static.fv.tk_wireframe`；同樣使用套件內幾何程式。
 
 需要 Python 3.10+、Tkinter 與 NumPy；PNG 匯出需要 Pillow。這台電腦的 Codex Python 已具備套件。其他環境可安裝：
 
@@ -23,7 +27,7 @@ python -m pip install -r requirements-suspension.txt
 4. 選擇圖表，拖動滑桿觀察目前姿態。拖曳過程會持續求解、顯示已完成的姿態，再接續求解最新滑桿位置，不必放開滑鼠。曲面與範圍圖是整個設定範圍的掃描，不會隨目前姿態改變掃描邊界。
 5. 3D 圖拖曳旋轉，2D 圖拖曳平移；滾輪縮放。幾何圖與 RC / PC 位置分布圖的 X、Y 軸維持相同單位的等比例，視窗縮放後也會維持。滑桿更新時保留目前縮放、平移與視角；按「重設視角」或雙擊才會重新置中。切換圖表、座標模式、車軸或套用新設計時會重新配合圖形範圍。結果表可捲動查看所有數值。
 
-基準專案為 `default_project.json`，數值來自原 `static/car.py`，包括前後 FVSA 1 m、RC 35 / 40 mm、KPI 12 / 13 deg、caster 5 / 0 deg。工具的可編輯設計值只讀 JSON；舊的 Car / Suspension 類別只用作靜態求解器的型別介面，不會呼叫它們的預設值建構子。舊腳本仍可獨立使用原有設定。
+基準專案為 `default_project.json`，數值沿用 `static/car.py` 的原始設定，包括前後 FVSA 1 m、RC 35 / 40 mm、KPI 12 / 13 deg、caster 5 / 0 deg。工具的可編輯設計值只讀 JSON；套件內的 Car / Suspension 類別只用作靜態求解器的型別介面，不會呼叫它們的預設值建構子。獨立靜態線框預覽仍可使用原有設定。
 
 本工具與原 Vehicle Lab 的 JSON 結構不同；兩者用途、硬點來源與參數種類不同，開啟錯誤格式會明確顯示錯誤。
 
@@ -59,7 +63,7 @@ FV / SV 的「滑桿 / 曲面座標」選單同時決定掃描座標。FV 可用
 
 ## 模型適用範圍
 
-FV 沿用雙圓求交的 2D 四連桿運動，車身上下接點固定；不會重新用 `suspension_geo/car.py` 解一份不同靜態設定。每次求解都以凍結零位為基準，防止多次滑動造成累積漂移；反算後會核對實際行程殘差。接點延長線平行時，RC / PC 顯示 N/A。
+FV 沿用雙圓求交的 2D 四連桿運動，車身上下接點固定，零位統一使用套件內靜態求解器與目前 JSON 專案。每次求解都以凍結零位為基準，防止多次滑動造成累積漂移；反算後會核對實際行程殘差。接點延長線平行時，RC / PC 顯示 N/A。
 
 SV 沿用原 `sus_sv_v4.py` 的 **Au / Al 固定切線路徑**，維持羊角剛性，並以真實接地參考點高度反算行程；不是完整 3D A 臂懸吊運動。Caster 隨羊角姿態與接地線傾角重新計算。Anti 數值保留原 SV 設計公式：兩軸 anti-dive 均以前煞車比例正規化，anti-lift 用 1−前煞車比例；這是與來源幾何一致的設計指標，不能直接當成完整前後軸煞車 / 驅動受力比例。
 
@@ -94,3 +98,5 @@ python -m unittest discover -s tests -v
 若受限執行環境的系統暫存目錄沒有寫入權限，可先將 `TEMP` 與 `TMP` 指向專案內已存在的 `.test-tmp` 目錄再執行測試。
 
 2026-11-03 新增接地座標系與圓點標記驗證：核對座標基底正交、世界剛體旋轉／平移不變性、RC / PC 垂直高度、前後 FV 位置曲面、無有限 RC 處理，以及 PNG / SVG 圓點與硬點 CSV 的接地座標欄位。
+
+2026-11-03 完成幾何模組內移：20 個靜態幾何／預覽模組與輪端幾何模組已收進本套件，移除 `new` 搜尋路徑與外部 import。包含原生介面的完整測試 **110 項通過，0 失敗、0 錯誤、0 略過**。新增隔離測試只複製 `suspension_lab` 與 `vehicle_lab`，在沒有 `new` 的目錄以 Python 隔離模式啟動，禁止匯入舊頂層套件，驗證專案往返、FV／SV／WE 求解與掃描、靜態圖表、GUI／預覽模組及命令列入口。搬移前後另比對預設與自訂專案的完整線框、硬點與多組姿態結果，序列化雜湊完全一致。

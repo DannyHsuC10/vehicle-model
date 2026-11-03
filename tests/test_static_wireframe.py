@@ -10,11 +10,10 @@ import unittest
 
 import numpy as np
 
-NEW_ROOT = Path(__file__).resolve().parents[1] / "new"
-sys.path.insert(0, str(NEW_ROOT))
+ROOT = Path(__file__).resolve().parents[1]
 
-from static.fv.tk_wireframe import WireframeViewer, project_points
-from static.fv.wireframe_geometry import build_wireframe_scene
+from suspension_lab.static.fv.tk_wireframe import WireframeViewer, project_points
+from suspension_lab.static.fv.wireframe_geometry import build_wireframe_scene
 
 
 class WireframeGeometryTests(unittest.TestCase):
@@ -27,13 +26,13 @@ class NoMatplotlib(importlib.abc.MetaPathFinder):
         if fullname.split('.')[0] in ('matplotlib', 'mpl_toolkits'):
             raise AssertionError('Preview tried to import ' + fullname)
 sys.meta_path.insert(0, NoMatplotlib())
-from static.fv.tk_wireframe import build_wireframe_scene
+from suspension_lab.static.fv.tk_wireframe import build_wireframe_scene
 scene = build_wireframe_scene()
 assert len(scene.geometry['kingpins']) == 4
 assert len(scene.geometry['arm_planes']) == 8
 assert all(len(line.points) >= 2 for line in scene.lines)
 """
-        result = subprocess.run([sys.executable, "-B", "-c", source], cwd=NEW_ROOT,
+        result = subprocess.run([sys.executable, "-B", "-c", source], cwd=ROOT,
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 

@@ -1,6 +1,6 @@
 # Vehicle Lab — FSAE 四馬達電動車離線設計工具
 
-另有獨立的 **Suspension Lab 懸吊幾何工作台**：雙擊 `Start-SuspensionLab.bat`，整合 `new/static` 的完整靜態構造與 FV / SV / WE3D 運動分析，參數以 JSON 專案保存。操作、座標定義與模型適用範圍見 [Suspension Lab 說明](suspension_lab/README.md)。
+另有獨立的 **Suspension Lab 懸吊幾何工作台**：雙擊 `Start-SuspensionLab.bat`，整合套件內的完整靜態構造與 FV / SV / WE3D 運動分析，參數以 JSON 專案保存；不依賴 `new` 資料夾。操作、座標定義與模型適用範圍見 [Suspension Lab 說明](suspension_lab/README.md)。
 
 以 Motomathics 九個公開工具頁的工程功能為起點，收斂成 **FSAE 四輪四馬達、固定減速比、雙 A 臂懸吊** 的本地桌面工具。使用 Python 與 Tkinter，計算不連網、不需帳號。介面為繁體中文，圖表與結果欄位採常見英文工程名稱。支援 Python 3.10 以上，已於 Windows / Python 3.12 驗證。
 
