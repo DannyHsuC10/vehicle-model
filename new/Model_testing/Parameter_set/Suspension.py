@@ -1,4 +1,5 @@
 import numpy as np
+from model.full_base import *
 g = 9.81
 
 class SuspensionQuarter:
