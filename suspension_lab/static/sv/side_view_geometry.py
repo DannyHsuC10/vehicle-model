@@ -54,42 +54,26 @@ class SideSuspension:
             [center_x, self.car.load_Radius[axle_index]], dtype=float
         )
 
-        anti_drive_angle = calc_anti_angle(
-            suspension.target_anti_dive_sv,
-            suspension.front_brake_bias_sv,
+        braking_angle = calc_anti_angle(
+            suspension.target_braking_anti_sv,
+            suspension.front_brake_bias_sv if axle_index == 0 else 1-suspension.front_brake_bias_sv,
             self.car.h_cog,
             self.car.l,
         )
-        anti_lift_angle = calc_anti_angle(
-            suspension.target_anti_lift_sv,
-            1.0 - suspension.front_brake_bias_sv,
-            self.car.h_cog,
-            self.car.l,
-        )
-
-        # Rear suspension is mirrored along X: its IC lies behind the rear tire.
-        drive_direction = np.array(
-            [direction_sign * np.cos(anti_drive_angle), np.sin(anti_drive_angle)]
-        )
-        lift_direction = np.array(
-            [direction_sign * np.cos(anti_lift_angle), np.sin(anti_lift_angle)]
-        )
-        # Optional JSON workbench design input: horizontal contact-to-IC distance.
-        # Zero retains the original anti-dive / anti-lift construction exactly.
-        svsa = float(getattr(suspension, "svsa", 0.0))
-        if svsa > 0.0:
-            self.initial_ic = self.contact_point + np.array([
-                direction_sign * svsa, svsa * np.tan(anti_drive_angle),
-            ])
+        brake_slope = np.tan(braking_angle)
+        if suspension.drive_force_share_sv > 0:
+            drive_slope = suspension.target_drive_anti_sv*self.car.h_cog/(suspension.drive_force_share_sv*self.car.l)
+            denominator = brake_slope-drive_slope
+            if abs(denominator) < 1e-12*max(1., abs(brake_slope), abs(drive_slope)):
+                raise ValueError(f"{name}：煞車與加速 Anti 力線平行，沒有有限瞬心；請調整 Anti 目標。")
+            offset = self.wheel_center-self.contact_point
+            distance = (offset[1]-drive_slope*direction_sign*offset[0])/denominator
         else:
-            self.initial_ic = ga.SusGeometryHelper.line_intersection(
-                self.wheel_center,
-                self.wheel_center + lift_direction,
-                self.contact_point,
-                self.contact_point + drive_direction,
-            )
-        if self.initial_ic is None:
-            raise ValueError(f"{name}: anti lines are parallel; no finite IC.")
+            distance = suspension.svsa
+        if not np.isfinite(distance) or abs(distance) < 1e-8:
+            raise ValueError(f"{name}：Anti 設定無法產生有效的有限 SVSA。")
+        self.initial_ic = self.contact_point + np.array(
+            [direction_sign*distance, distance*brake_slope])
 
         self.kingpin_ground = np.array(
             [center_x - direction_sign * suspension.mechanical_trail_sv, 0.0]
@@ -141,7 +125,7 @@ class SideSuspension:
         self.svsa_link = ge.Link(self.contact_pt, self.ic_pt, f"{name} SVSA")
         self.au_ic_link = ge.Link(self.au_pt, self.ic_pt, f"{name} Au to IC")
         self.al_ic_link = ge.Link(self.al_pt, self.ic_pt, f"{name} Al to IC")
-        self.anti_lift_link = ge.Link(self.wc_pt, self.ic_pt, f"{name} anti-lift")
+        self.anti_lift_link = ge.Link(self.wc_pt, self.ic_pt, f"{name} drive reference")
 
     def _point_on_kingpin(self, target_y):
         t = (target_y - self.kingpin_ground[1]) / self.kingpin_direction[1]

@@ -5,20 +5,24 @@ from pathlib import Path
 import queue
 import threading
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 
 from vehicle_lab.gui import ScrollFrame
 from vehicle_lab.export import write_csv
-from .project import (FIELDS, default_project, load_project, save_project, validate)
-from .engine import Engine
+from .project import (FIELDS, DERIVED_AXLE_FIELDS, MOUNT_X_FIELDS, mount_x_settings, travel_limits,
+                      drive_share, drive_anti_key, is_derived_input,
+                      default_project, load_project, save_project, validate)
+from .engine import Engine, Unreachable
 from .analysis import PAGES, PLOTS, NOTES, calculate_mapping, make_plot, static_point_rows
 from .charts import LabChart
 from .export import point_rows, write_report
+from . import hardpoints
+from .anti import anti_ratio
 
 FRAME_INTERVAL_MS = 16
 
 
-def field_entries(parent, project, groups):
+def field_entries(parent, project, groups, widgets=None):
     variables = {}
     for title, group, keys in groups:
         ttk.Label(parent, text=title, font=("Microsoft JhengHei UI", 11, "bold"), padding=(0, 12, 0, 6)).pack(anchor="w")
@@ -28,53 +32,357 @@ def field_entries(parent, project, groups):
             row.pack(fill="x", pady=2)
             ttk.Label(row, text=f"{label} ({unit})", wraplength=215).pack(side="left", fill="x", expand=True)
             var = tk.StringVar(value=f"{project[group][key]:.10g}")
-            ttk.Entry(row, textvariable=var, width=12).pack(side="right", padx=(6, 0))
+            entry = ttk.Entry(row, textvariable=var, width=12)
+            entry.pack(side="right", padx=(6, 0))
+            if widgets is not None:
+                widgets[(group, key)] = entry
             variables[(group, key)] = var
     return variables
 
 
-def read_entries(project, entries):
+def read_entries(project, entries, drive_override=None):
     result = copy.deepcopy(project)
-    for (group, key), var in entries.items():
+    # Decide dependent axle fields using the newly entered vehicle settings.
+    for (group, key), var in sorted(entries.items(), key=lambda item: item[0][0] != "vehicle"):
+        if group == "vehicle" and key == "drive_force_front" and drive_override is not None:
+            result[group][key] = drive_override
+            continue
+        if hardpoints.enabled(project) and group in ("front", "rear"):
+            continue
+        if group in ("front", "rear") and is_derived_input(result, group, key):
+            continue
+        # Entries show a readable precision. Preserve the full stored value
+        # when that display was not edited, so changing drive share alone
+        # cannot round SVSA or the other geometric inputs.
+        if var.get().strip() == f"{project[group][key]:.10g}":
+            continue
         try:
             result[group][key] = float(var.get())
         except ValueError as exc:
             raise ValueError(f"{group} · {FIELDS[group][key][0]} 需要數值。") from exc
-    result["analysis"]["samples"] = int(result["analysis"]["samples"]) if result["analysis"]["samples"].is_integer() else result["analysis"]["samples"]
+    samples = result["analysis"]["samples"]
+    result["analysis"]["samples"] = int(samples) if float(samples).is_integer() else samples
     return validate(result)
+
+
+def update_anti_widgets(project, engine, entries, widgets, direct=False):
+    for (group, key), var in entries.items():
+        if group not in ("front", "rear"):
+            continue
+        derived = is_derived_input(project, group, key)
+        widgets[(group, key)].configure(state="disabled" if direct else "readonly" if derived else "normal")
+        if derived and not direct:
+            value = 0. if key == drive_anti_key(group) else engine.derived_parameters[group][key]
+            var.set("N/A" if value is None else f"{value:.10g}")
+
+
+def seed_drive_transition(entries, old_drive, new_drive, engine):
+    """When an axle crosses zero drive, keep its current IC while switching inputs."""
+    for axle in ("front", "rear"):
+        old = old_drive if axle == "front" else 1-old_drive
+        new = new_drive if axle == "front" else 1-new_drive
+        if (old == 0) == (new == 0):
+            continue
+        if new == 0:
+            key, value = "svsa", engine.derived_parameters[axle]["svsa"]
+        else:
+            key = drive_anti_key(axle)
+            t = engine.sv[axle].template
+            value = anti_ratio(t.initial_ic, t.wheel_center, engine.car.l, engine.car.h_cog,
+                               new, t.direction_sign)
+        if (axle, key) in entries and value is not None:
+            entries[(axle, key)].set(repr(value))
 
 
 class ParameterEditor(tk.Toplevel):
     def __init__(self, app):
         super().__init__(app)
         self.app = app
-        self.title("共用車輛參數 · Suspension Lab")
-        self.geometry("700x760")
+        self._preview_timer = None
+        self._preview_traces = []
+        self._mount_positions_changed = False
+        self._updating_geometry_fields = False
+        self._input_drive_front = app.project["vehicle"]["drive_force_front"]
+        self.title("共用車輛／懸吊設定 · Suspension Lab")
+        self.geometry("1060x820")
+        self.minsize(940, 700)
         self.transient(app)
         self.grab_set()
-        ttk.Label(self, text="所有頁面共用一份 JSON 設定；長度 m、角度 deg、比例 1=100%。", padding=14).pack(fill="x")
+        ttk.Label(self, text="所有頁面共用一份 JSON 設定；一般長度 m、角度 deg、比例 1=100%。硬點與 A 臂車身 X 欄位使用 mm。", padding=14).pack(fill="x")
         name_row = ttk.Frame(self, padding=(14, 0, 14, 10))
         name_row.pack(fill="x")
         ttk.Label(name_row, text="專案名稱").pack(side="left")
         self.name = tk.StringVar(value=app.project["name"])
         ttk.Entry(name_row, textvariable=self.name).pack(side="left", fill="x", expand=True, padx=10)
+        self.hardpoint_mode = tk.BooleanVar(value=hardpoints.enabled(app.project))
+        self.point_data = copy.deepcopy(app.project["hardpoints"]["corners"]) if "hardpoints" in app.project else hardpoints.from_scene(app.engine.scene)
+        self.points_edited = "hardpoints" in app.project
+        self.hardpoint_check = ttk.Checkbutton(
+            self, text="使用直接修改硬點 XYZ（取消勾選：使用懸吊參數解算）", variable=self.hardpoint_mode,
+            command=self.change_geometry_mode)
+        self.hardpoint_check.pack(anchor="w", padx=14, pady=(0, 10))
         notebook = ttk.Notebook(self)
+        self.notebook = notebook
         notebook.pack(fill="both", expand=True, padx=14)
-        self.entries = {}
-        for group, label in (("vehicle", "車輛 / 輪胎"), ("front", "前軸懸吊"), ("rear", "後軸懸吊"), ("analysis", "掃描範圍")):
+        self.entries, self.entry_widgets = {}, {}
+        self.mount_x_entries, self.mount_x_widgets, self.mount_x_labels = {}, {}, {}
+        for group, label in (("vehicle", "車輛 / 輪胎"), ("front", "前軸參數模式"), ("rear", "後軸參數模式"), ("analysis", "掃描範圍")):
             frame = ScrollFrame(notebook)
             notebook.add(frame, text=label)
-            self.entries.update(field_entries(frame.content, app.project, [(label, group, FIELDS[group])]))
-        ttk.Label(self, text="SVSA=0：由 anti-dive / anti-lift 解瞬心。SVSA>0：使用指定水平長與 anti-dive，anti-lift 由結果算出。", wraplength=640, padding=14).pack(fill="x")
+            self.entries.update(field_entries(frame.content, app.project, [(label, group, FIELDS[group])], self.entry_widgets))
+            if group == "vehicle":
+                ttk.Label(frame.content, text="加速比例為前軸驅動力占比：0 後驅、1 前驅，後軸自動為 1−此值；與煞車比例獨立。",
+                          wraplength=850, foreground="#475569").pack(fill="x", pady=8)
+            if group in ("front", "rear"):
+                ttk.Label(frame.content, text="此軸驅動力比例 >0：用煞車 Anti＋加速 Anti 求瞬心，SVSA 唯讀；比例 =0：改填 SVSA，加速 Anti 為 0。SVSA 正值朝另一軸。",
+                          wraplength=850, foreground="#475569").pack(fill="x", pady=8)
+                self.build_mount_x_fields(frame.content, group)
+        self.hardpoint_tab = ttk.Frame(notebook, padding=10)
+        notebook.insert(1, self.hardpoint_tab, text="24 個懸吊硬點")
+        self.build_hardpoint_tab()
+        ttk.Label(self, text="硬點模式保留原始 XYZ，參數由幾何反算；參數模式保留原設計輸入。兩模式皆由此視窗套用至全部頁面。", wraplength=980, padding=14).pack(fill="x")
         buttons = ttk.Frame(self, padding=14)
         buttons.pack(fill="x")
         ttk.Button(buttons, text="取消", command=self.destroy).pack(side="right")
-        ttk.Button(buttons, text="套用全部參數", command=self.apply).pack(side="right", padx=8)
+        ttk.Button(buttons, text="套用全部設定", command=self.apply).pack(side="right", padx=8)
+        self.change_geometry_mode()
+        if not self.hardpoint_mode.get():
+            self.notebook.select(self.hardpoint_tab)
+        for var in [self.name, *self.entries.values()]:
+            callback = self.drive_changed if var is self.entries[("vehicle", "drive_force_front")] else self.schedule_derived
+            trace = var.trace_add("write", callback)
+            self._preview_traces.append((var, trace))
+        for var in self.mount_x_entries.values():
+            trace = var.trace_add("write", self.schedule_mount_positions)
+            self._preview_traces.append((var, trace))
+
+    def build_mount_x_fields(self, parent, axle):
+        ttk.Label(parent, text="A 臂車身接點 · 全車縱向 X", font=("Microsoft JhengHei UI", 11, "bold"),
+                  padding=(0, 16, 0, 6)).pack(anchor="w")
+        ttk.Label(parent, text="單位 mm；空白使用輪圈避讓極限。X 向前，後接點 X 必須小於前接點 X。\n"
+                  "沿用 FV 接點指定的全車 Y，以 A 臂平面解 Z；同一支臂任何接點違規時，兩點皆回到極限。",
+                  wraplength=850).pack(anchor="w", pady=(0, 6))
+        for key, label in MOUNT_X_FIELDS.items():
+            field = (axle, key)
+            row = ttk.Frame(parent)
+            row.pack(fill="x", pady=(6, 0))
+            ttk.Label(row, text=label+" (mm)").pack(side="left", fill="x", expand=True)
+            value = mount_x_settings(self.app.project)[axle][key]
+            var = tk.StringVar(value="" if value is None else f"{value*1000:.12g}")
+            entry = ttk.Entry(row, textvariable=var, width=16)
+            entry.pack(side="right", padx=(6, 0))
+            status = ttk.Label(parent, text="", wraplength=850, foreground="#475569")
+            status.pack(fill="x", pady=(2, 4))
+            self.mount_x_entries[field], self.mount_x_widgets[field], self.mount_x_labels[field] = var, entry, status
+
+    def build_hardpoint_tab(self):
+        frame = self.hardpoint_tab
+        ttk.Label(frame, text="X 向前、Y 向左、Z 向上；前軸 X=0、後軸 X=−軸距。表格單位 mm。\n"
+                  "每輪上／下 A 臂各三點。雙擊任一硬點編輯 XYZ，對側同名點立即鏡射（X、−Y、Z）。",
+                  padding=(0, 0, 0, 10)).pack(anchor="w")
+        body = ttk.Frame(frame)
+        body.pack(fill="both", expand=True)
+        left = ttk.Frame(body)
+        left.pack(side="left", fill="both", expand=True)
+        self.hardpoint_tree = ttk.Treeview(left, columns=("x", "y", "z"), show="tree headings", selectmode="browse")
+        self.hardpoint_tree.heading("#0", text="硬點／雙擊編輯")
+        self.hardpoint_tree.column("#0", width=230, minwidth=180)
+        for axis in ("x", "y", "z"):
+            self.hardpoint_tree.heading(axis, text=axis.upper()+" (mm)")
+            self.hardpoint_tree.column(axis, width=90, minwidth=75, anchor="e")
+        scrollbar = ttk.Scrollbar(left, command=self.hardpoint_tree.yview)
+        self.hardpoint_tree.configure(yscrollcommand=scrollbar.set)
+        self.hardpoint_tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        self.hardpoint_tree.bind("<Double-1>", self.edit_hardpoint)
+        right = ttk.Frame(body, padding=(12, 0, 0, 0))
+        right.pack(side="left", fill="y")
+        ttk.Label(right, text="硬點反算靜態結果（唯讀）").pack(anchor="w", pady=(0, 6))
+        self.derived_tree = ttk.Treeview(right, columns=("front", "rear"), show="tree headings", height=15)
+        self.derived_tree.heading("#0", text="參數／單位")
+        self.derived_tree.column("#0", width=180)
+        for axle, label in (("front", "前軸"), ("rear", "後軸")):
+            self.derived_tree.heading(axle, text=label)
+            self.derived_tree.column(axle, width=85, anchor="e")
+        self.derived_tree.pack(fill="y", expand=True)
+        controls = ttk.Frame(frame, padding=(0, 10, 0, 0))
+        controls.pack(fill="x")
+        ttk.Button(controls, text="由目前參數重新產生 24 點", command=self.regenerate_hardpoints).pack(side="left")
+        self.derivation_message = tk.StringVar()
+        ttk.Label(frame, textvariable=self.derivation_message, wraplength=980, foreground="#475569",
+                  padding=(0, 10, 0, 0)).pack(fill="x")
+        ttk.Label(frame, text="輪心與輪胎位置沿用車輛／輪距／負載半徑設定。FV 使用等效樞點；SV 使用硬點軸線的切線近似；"
+                  "WE3D 繞 UBJ–LBJ 主銷轉向。六點未包含轉向拉桿，不求解 bump steer 或行程與轉向的完整 3D 耦合。",
+                  wraplength=980, foreground="#475569", padding=(0, 8, 0, 0)).pack(fill="x")
+        self.populate_hardpoints()
+
+    def candidate(self, mode=None, drive_override=None):
+        base = copy.deepcopy(self.app.project)
+        base["arm_mount_x"] = {axle: {} for axle in ("front", "rear")}
+        for (axle, key), var in self.mount_x_entries.items():
+            raw = var.get().strip()
+            stored = mount_x_settings(self.app.project)[axle][key]
+            displayed = "" if stored is None else f"{stored*1000:.12g}"
+            try:
+                value = stored if raw == displayed else float(raw)/1000 if raw else None
+            except ValueError as exc:
+                self.mount_x_labels[(axle, key)].configure(text="請輸入有效的 X 數值（mm），或留白使用極限。", foreground="#b45309")
+                raise ValueError(f"{axle} · {MOUNT_X_FIELDS[key]} 需要數值。") from exc
+            base["arm_mount_x"][axle][key] = value
+        # These entries contain the retained design inputs, even in hardpoint mode.
+        # Panel entries, in contrast, show derived values and are skipped there.
+        base["hardpoints"] = {"enabled": False, "corners": copy.deepcopy(self.point_data)}
+        result = read_entries(base, self.entries, drive_override)
+        result["hardpoints"]["enabled"] = self.hardpoint_mode.get() if mode is None else mode
+        result["name"] = self.name.get().strip()
+        return result
+
+    def change_geometry_mode(self):
+        if self.hardpoint_mode.get() and not self.points_edited:
+            if not self.regenerate_hardpoints():
+                self.hardpoint_mode.set(False)
+        for (group, key), entry in self.entry_widgets.items():
+            if group in ("front", "rear"):
+                entry.configure(state="disabled" if self.hardpoint_mode.get() else "normal")
+        for entry in self.mount_x_widgets.values():
+            entry.configure(state="disabled" if self.hardpoint_mode.get() else "normal")
+        self.hardpoint_tree.state(["!disabled"] if self.hardpoint_mode.get() else ["disabled"])
+        if self.hardpoint_mode.get():
+            self.notebook.select(self.hardpoint_tab)
+        self.refresh_derived()
+
+    def populate_hardpoints(self):
+        tree = self.hardpoint_tree
+        selection = tree.selection()
+        tree.delete(*tree.get_children())
+        for corner in hardpoints.CORNERS:
+            tree.insert("", "end", iid=corner, text=corner, open=True)
+            for key, label in hardpoints.POINTS.items():
+                tree.insert(corner, "end", iid=corner+"/"+key, text=key+" · "+label,
+                            values=[f"{value*1000:.4f}" for value in self.point_data[corner][key]])
+        if selection and tree.exists(selection[0]):
+            tree.selection_set(selection)
+
+    def set_hardpoint(self, corner, name, coordinates):
+        hardpoints.set_point(self.point_data, corner, name, coordinates)
+        self.points_edited = True
+        self.populate_hardpoints()
+        self.refresh_derived()
+
+    def edit_hardpoint(self, event):
+        row = self.hardpoint_tree.identify_row(event.y)
+        if not self.hardpoint_mode.get() or "/" not in row:
+            return
+        corner, name = row.split("/")
+        point = self.point_data[corner][name]
+        raw = simpledialog.askstring("編輯懸吊硬點", f"{corner}/{name}：X, Y, Z（mm）；對側會同步鏡射。",
+                                     initialvalue=", ".join(f"{x*1000:.12g}" for x in point), parent=self)
+        if raw is None:
+            return
+        try:
+            coordinates = [float(x.strip())/1000 for x in raw.replace("，", ",").split(",")]
+            self.set_hardpoint(corner, name, coordinates)
+        except ValueError as exc:
+            messagebox.showerror("硬點座標錯誤", str(exc), parent=self)
+
+    def regenerate_hardpoints(self):
+        try:
+            engine = Engine(self.candidate(False))
+            self.point_data = hardpoints.from_scene(engine.scene)
+            self.points_edited = False
+            self.populate_hardpoints()
+            self.refresh_derived()
+            return True
+        except (ValueError, ArithmeticError) as exc:
+            messagebox.showerror("無法由參數產生硬點", str(exc), parent=self)
+            return False
+
+    def refresh_derived(self):
+        if self._preview_timer is not None:
+            self.after_cancel(self._preview_timer)
+            self._preview_timer = None
+        self.derived_tree.delete(*self.derived_tree.get_children())
+        try:
+            parameter_engine = Engine(self.candidate(False))
+            self.parameter_engine = parameter_engine
+            self._updating_geometry_fields = True
+            try:
+                update_anti_widgets(parameter_engine.project, parameter_engine, self.entries, self.entry_widgets, self.hardpoint_mode.get())
+            finally:
+                self._updating_geometry_fields = False
+            checks = parameter_engine.scene.geometry["mount_position_checks"]
+            for (axle, key), label in self.mount_x_labels.items():
+                check = checks[axle][key]
+                if check["limit_min_x"] is None:
+                    text = check["message"]
+                else:
+                    text = (f"極限 X：{check['limit_min_x']*1000:.6f} ～ {check['limit_max_x']*1000:.6f} mm；"
+                            f"實際使用 X：{check['actual_x']*1000:.6f} mm。")
+                    if check["message"]:
+                        text += "\n"+check["message"]
+                label.configure(text=text, foreground="#b45309" if check["fallback"] else "#475569")
+            if self._mount_positions_changed and not self.points_edited and not self.hardpoint_mode.get():
+                self.point_data = hardpoints.from_scene(parameter_engine.scene)
+                self.populate_hardpoints()
+            self._mount_positions_changed = False
+            engine = Engine(self.candidate(True))
+            for key, (label, unit) in DERIVED_AXLE_FIELDS.items():
+                values = [engine.derived_parameters[axle][key] for axle in ("front", "rear")]
+                self.derived_tree.insert("", "end", iid=key, text=f"{label} ({unit})",
+                                         values=["N/A" if value is None else f"{value:.7g}" for value in values])
+            self.derivation_message.set("硬點幾何有效。N/A 表示平行投影沒有有限瞬心／中心。" +
+                                        ("目前使用硬點模式。" if self.hardpoint_mode.get() else "目前使用參數模式；硬點表為草稿，勾選後才使用。"))
+        except (ValueError, ArithmeticError) as exc:
+            self.derivation_message.set("硬點草稿尚無法套用："+str(exc))
+
+    def drive_changed(self, *_):
+        if self._updating_geometry_fields:
+            return
+        try:
+            new = float(self.entries[("vehicle", "drive_force_front")].get())
+            if not 0 <= new <= 1:
+                raise ValueError()
+            old = self._input_drive_front
+            try:
+                engine = Engine(self.candidate(False, drive_override=old))
+            except (ValueError, ArithmeticError):
+                engine = getattr(self, "parameter_engine", self.app.engine)
+            self._updating_geometry_fields = True
+            try:
+                seed_drive_transition(self.entries, old, new, engine)
+                project = copy.deepcopy(engine.project)
+                project["vehicle"]["drive_force_front"] = new
+                update_anti_widgets(project, engine, self.entries, self.entry_widgets, self.hardpoint_mode.get())
+                self._input_drive_front = new
+            finally:
+                self._updating_geometry_fields = False
+        except ValueError:
+            pass
+        self.schedule_derived()
+
+    def schedule_derived(self, *_):
+        if self._updating_geometry_fields:
+            return
+        if self._preview_timer is not None:
+            self.after_cancel(self._preview_timer)
+        self._preview_timer = self.after(200, self.refresh_derived)
+
+    def schedule_mount_positions(self, *_):
+        self._mount_positions_changed = True
+        self.schedule_derived()
+
+    def destroy(self):
+        if self._preview_timer is not None:
+            self.after_cancel(self._preview_timer)
+            self._preview_timer = None
+        for var, trace in self._preview_traces:
+            var.trace_remove("write", trace)
+        self._preview_traces.clear()
+        super().destroy()
 
     def apply(self):
         try:
-            candidate = read_entries(self.app.project, self.entries)
-            candidate["name"] = self.name.get().strip()
+            candidate = self.candidate()
             self.app.apply_project(candidate)
             self.destroy()
         except (ValueError, ArithmeticError) as exc:
@@ -85,6 +393,8 @@ class Panel(ttk.Frame):
     def __init__(self, app, key):
         super().__init__(app.notebook)
         self.app, self.key = app, key
+        self._updating_geometry_fields = False
+        self._input_drive_front = app.project["vehicle"]["drive_force_front"]
         self.token = 0
         self.timer = None
         self._request_in_flight = False
@@ -108,9 +418,12 @@ class Panel(ttk.Frame):
         pane.add(right, weight=1)
         self.scroll = ScrollFrame(left)
         self.scroll.pack(fill="both", expand=True, padx=(10, 4))
-        self.entries = field_entries(self.scroll.content, app.project, self.field_groups())
+        self.entry_widgets = {}
+        self.entries = field_entries(self.scroll.content, app.project, self.field_groups(), self.entry_widgets)
+        self.geometry_hint = ttk.Label(self.scroll.content, text="", wraplength=295, foreground="#475569")
+        self.geometry_hint.pack(fill="x", pady=(8, 0))
         if key in ("sv", "static"):
-            ttk.Label(self.scroll.content, text="SVSA>0 時由 SVSA 與 anti-dive 決定 IC；anti-lift 改為計算結果。", wraplength=295, foreground="#64748b", padding=(0, 12)).pack(fill="x")
+            ttk.Label(self.scroll.content, text="此軸有驅動力：煞車 Anti＋加速 Anti 求瞬心，SVSA 唯讀；無驅動力：填 SVSA。修改後按套用更新結果。SVSA 正值朝另一軸。", wraplength=295, foreground="#64748b", padding=(0, 12)).pack(fill="x")
         ttk.Button(left, text="套用左側參數並重新解算", command=self.apply).pack(fill="x", padx=10, pady=10)
         toolbar = ttk.Frame(right, padding=(8, 10))
         toolbar.pack(fill="x")
@@ -133,6 +446,8 @@ class Panel(ttk.Frame):
             combo = ttk.Combobox(row, state="readonly", textvariable=self.mode, values=modes, width=18)
             combo.pack(side="left", padx=8)
             combo.bind("<<ComboboxSelected>>", self.change_mode)
+            hint = "角度範圍由上下行程自動推導" if key == "sv" else "Roll 由目前 Heave 與左右輪行程上下限控制"
+            ttk.Label(row, text=hint, foreground="#64748b").pack(side="left", padx=8)
         if key == "static":
             row = ttk.Frame(right, padding=(8, 0))
             row.pack(fill="x")
@@ -161,7 +476,7 @@ class Panel(ttk.Frame):
         metric_frame = ttk.Frame(right)
         self.metrics = ttk.Treeview(metric_frame, columns=("metric", "value"), show="headings", height=5)
         self.metrics.heading("metric", text="目前姿態結果 / 單位")
-        self.metrics.heading("value", text="數值（N/A：無有限交點）")
+        self.metrics.heading("value", text="數值（N/A：目前姿態無有效定義）")
         self.metrics.column("metric", width=270)
         self.metrics.column("value", width=240)
         self.metrics.pack(side="left", fill="both", expand=True)
@@ -174,16 +489,20 @@ class Panel(ttk.Frame):
         metric_frame.pack(side="bottom", fill="x", padx=8)
         self.chart.pack(fill="both", expand=True, padx=8, pady=6)
         self.ready = True
+        self.sync_geometry_fields()
+        if ("vehicle", "drive_force_front") in self.entries:
+            self.entries[("vehicle", "drive_force_front")].trace_add("write", self.drive_changed)
 
     def field_groups(self):
         k = self.key
-        v = ["track_"+k, "free_radius", "tire_width"] if k in ("front", "rear") else list(FIELDS["vehicle"]) if k == "static" else ["wheelbase", "cg_height", "ground_clearance", "free_radius", "tire_stiffness", "brake_bias_front"]
+        v = ["track_"+k, "free_radius", "tire_width"] if k in ("front", "rear") else list(FIELDS["vehicle"]) if k == "static" else ["wheelbase", "cg_height", "ground_clearance", "free_radius", "tire_stiffness", "brake_bias_front", "drive_force_front"]
         groups = [("共用車輛 / 輪胎", "vehicle", v)]
         if k in ("front", "rear"):
             groups.append((PAGES[k]+" 設計", k, list(FIELDS[k])[:8]))
         elif k in ("sv", "we"):
-            keys = ["caster_deg", "mechanical_trail", "anti_dive", "anti_lift", "svsa", "upper_offset", "lower_offset"] if k == "sv" else ["kpi_deg", "caster_deg", "scrub_radius", "mechanical_trail"]
             for axle, title in (("front", "前軸設計"), ("rear", "後軸設計")):
+                keys = (["caster_deg", "mechanical_trail", "anti_dive" if axle == "front" else "anti_lift", drive_anti_key(axle), "svsa", "upper_offset", "lower_offset"]
+                        if k == "sv" else ["kpi_deg", "caster_deg", "scrub_radius", "mechanical_trail"])
                 groups.append((title, axle, keys))
         else:
             for axle in ("front", "rear"):
@@ -197,8 +516,7 @@ class Panel(ttk.Frame):
             self.timer = None
         self._request_in_flight = self._slider_pending = False
         self.ready_for_export = False
-        for (group, key), var in self.entries.items():
-            var.set(f"{self.app.project[group][key]:.10g}")
+        self.sync_geometry_fields()
         self.state = self.mapping = self.error = None
         self.token += 1
         self.pending_export = None
@@ -208,6 +526,48 @@ class Panel(ttk.Frame):
             var.set(0.)
         self.chart.set(None)
         self.metrics.delete(*self.metrics.get_children())
+
+    def sync_geometry_fields(self):
+        direct = hardpoints.enabled(self.app.project)
+        self._updating_geometry_fields = True
+        try:
+            for (group, key), var in self.entries.items():
+                derived = direct and group in ("front", "rear")
+                value = self.app.engine.derived_parameters[group][key] if derived else self.app.project[group][key]
+                var.set("N/A" if value is None else f"{value:.10g}")
+                self.entry_widgets[(group, key)].configure(state="disabled" if derived else "normal")
+            update_anti_widgets(self.app.project, self.app.engine, self.entries, self.entry_widgets, direct)
+            self._input_drive_front = self.app.project["vehicle"]["drive_force_front"]
+        finally:
+            self._updating_geometry_fields = False
+        self.geometry_hint.configure(text="硬點模式：懸吊參數為反算唯讀值；請由上方共用設定編輯 24 個硬點。" if direct else "參數模式：由懸吊設計參數解算靜態幾何。")
+        self.note.configure(text=NOTES[self.key] + (" 硬點模式：FV 使用等效樞點，SV 沿硬點軸線的固定切線近似；靜態 3D 與 WE 使用原始 XYZ。" if direct else ""))
+
+    def drive_changed(self, *_):
+        if self._updating_geometry_fields:
+            return
+        try:
+            new = float(self.entries[("vehicle", "drive_force_front")].get())
+            if not 0 <= new <= 1:
+                return
+            old = self._input_drive_front
+            try:
+                engine = Engine(read_entries(self.app.project, self.entries, drive_override=old))
+            except (ValueError, ArithmeticError):
+                engine = self.app.engine
+            self._updating_geometry_fields = True
+            try:
+                direct = hardpoints.enabled(self.app.project)
+                if not direct:
+                    seed_drive_transition(self.entries, old, new, engine)
+                project = copy.deepcopy(engine.project)
+                project["vehicle"]["drive_force_front"] = new
+                update_anti_widgets(project, engine, self.entries, self.entry_widgets, direct)
+                self._input_drive_front = new
+            finally:
+                self._updating_geometry_fields = False
+        except ValueError:
+            return
 
     def apply(self):
         try:
@@ -220,8 +580,26 @@ class Panel(ttk.Frame):
         pose = self.mode.get().startswith("Heave")
         labels = ["Steering (deg)"] if self.key == "we" else (["Heave (mm)", "Pitch (deg)" if self.key == "sv" else "Roll (deg)"] if pose else ["前輪上壓行程 (mm)", "後輪上壓行程 (mm)"] if self.key == "sv" else ["左輪上壓行程 (mm)", "右輪上壓行程 (mm)"])
         for i, scale in enumerate(self.sliders):
-            limit = a["steer_deg"] if self.key == "we" else a["pitch_deg" if self.key == "sv" else "roll_deg"] if pose and i == 1 else a["travel_mm"]
-            scale.configure(from_=-limit, to=limit)
+            if self.key == "we":
+                low, high = -a["steer_deg"], a["steer_deg"]
+            elif pose and i == 1:
+                if self.key == "sv":
+                    limit = self.app.engine.pitch_angle_limit()
+                    low, high = -limit, limit
+                else:
+                    try:
+                        low, high = self.app.engine.fv[self.key].roll_bounds(self.controls[0].get())
+                    except Unreachable:
+                        low = high = 0.
+                    # Moving Heave can consume the remaining differential
+                    # travel, so keep Roll inside the new per-wheel bounds.
+                    value = min(high, max(low, self.controls[i].get()))
+                    if value != self.controls[i].get():
+                        self.controls[i].set(value)
+            else:
+                low, high = travel_limits(self.app.project)
+            scale.configure(from_=low, to=high)
+            scale.state(["disabled"] if low == high else ["!disabled"])
             self.slider_labels[i].configure(text=f"{labels[i]}  {self.controls[i].get():+.2f}")
 
     def change_mode(self, event=None):
@@ -353,7 +731,11 @@ class App(tk.Tk):
         style.configure("TLabel", background="#f1f5f9", font=("Microsoft JhengHei UI", 10))
         style.configure("TButton", padding=(9, 5), font=("Microsoft JhengHei UI", 10))
         style.configure("TNotebook.Tab", padding=(22, 9), font=("Microsoft JhengHei UI", 11))
-        self.project = copy.deepcopy(project or default_project())
+        style.configure("TEntry", fieldbackground="#ffffff", foreground="#0f172a")
+        style.map("TEntry",
+                  fieldbackground=[("disabled", "#cbd5e1"), ("readonly", "#e2e8f0")],
+                  foreground=[("disabled", "#475569"), ("readonly", "#475569")])
+        self.project = copy.deepcopy(validate(project or default_project()))
         self.engine = Engine(self.project)
         self.revision = 0
         self.dirty = self.closing = False
@@ -366,7 +748,7 @@ class App(tk.Tk):
         ttk.Label(header, text="SUSPENSION LAB", font=("Segoe UI", 19, "bold")).pack(side="left")
         self.project_label = ttk.Label(header, text=self.project["name"], foreground="#475569")
         self.project_label.pack(side="left", padx=20)
-        for text, command in (("共用車輛參數", self.open_parameters), ("開啟專案", self.open_project),
+        for text, command in (("共用車輛／懸吊設定", self.open_parameters), ("開啟專案", self.open_project),
                               ("儲存專案", self.save), ("另存專案", lambda: self.save(True))):
             ttk.Button(header, text=text, command=command).pack(side="right", padx=4)
         self.notebook = ttk.Notebook(self)
@@ -415,7 +797,7 @@ class App(tk.Tk):
     def apply_project(self, candidate, mark_dirty=True):
         # Build everything before committing, so invalid geometry is transactional.
         engine = Engine(candidate)
-        self.project, self.engine = copy.deepcopy(candidate), engine
+        self.project, self.engine = copy.deepcopy(engine.project), engine
         self.revision += 1
         self.mapping_cache = {}
         self.dirty = mark_dirty
@@ -504,7 +886,9 @@ class App(tk.Tk):
                 if panel.key == "static":
                     controls.update(static_references=panel.static_references.get(),
                                     static_groups={k: v.get() for k, v in panel.groups.items()})
-                write_report(path, self.project, panel.key, panel.state, panel.mapping, panel.chart.svg(), controls)
+                write_report(path, self.project, panel.key, panel.state, panel.mapping, panel.chart.svg(), controls,
+                             derived_parameters=self.engine.derived_parameters,
+                             mount_position_checks=self.engine.scene.geometry.get("mount_position_checks"))
             self.status.set(f"已匯出：{path}")
         except (OSError, ValueError) as exc:
             messagebox.showerror("匯出失敗", str(exc), parent=self)

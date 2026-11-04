@@ -26,6 +26,7 @@ from .rear_arm_mount_geometry import (
 from .upper_arm_mount_geometry import build_upper_arm_mount_geometry
 from .wheel_projection_geometry import build_axle_wheel_projection_geometry
 from ..sv.side_view_geometry import build_side_view_geometry
+from .mount_position_geometry import position_arm_mounts
 
 
 VIEW_COLORS = {"front": "#0072b2", "rear": "#d55e00", "sv": "#009e73"}
@@ -150,7 +151,7 @@ class _LineCollector:
         ))
 
 
-def build_wireframe_scene(car=None, suspension_f=None, suspension_r=None, settings=None):
+def build_wireframe_scene(car=None, suspension_f=None, suspension_r=None, settings=None, *, mount_x=None):
     """Return only structural/construction outlines, with no fills or annotations."""
     car = Car() if car is None else car
     suspension_f = SuspensionF() if suspension_f is None else suspension_f
@@ -173,6 +174,11 @@ def build_wireframe_scene(car=None, suspension_f=None, suspension_r=None, settin
     lower_mounts = build_lower_arm_mount_geometry(front, kingpins, intersections)
     rear_upper_mounts = build_rear_upper_arm_mount_geometry(rear, kingpins, rear_intersections)
     rear_lower_mounts = build_rear_lower_arm_mount_geometry(rear, kingpins, rear_intersections)
+    mount_x = mount_x or {}
+    upper_mounts = position_arm_mounts(upper_mounts, arm_planes, mount_x.get("front", {}), arm="upper")
+    lower_mounts = position_arm_mounts(lower_mounts, arm_planes, mount_x.get("front", {}), arm="lower")
+    rear_upper_mounts = position_arm_mounts(rear_upper_mounts, arm_planes, mount_x.get("rear", {}), arm="upper")
+    rear_lower_mounts = position_arm_mounts(rear_lower_mounts, arm_planes, mount_x.get("rear", {}), arm="lower")
     mount_groups = (upper_mounts, lower_mounts, rear_upper_mounts, rear_lower_mounts)
 
     lines = []
@@ -295,6 +301,10 @@ def build_wireframe_scene(car=None, suspension_f=None, suspension_r=None, settin
         "upper_arm_mount_geometry": upper_mounts, "lower_arm_mount_geometry": lower_mounts,
         "rear_upper_arm_mount_geometry": rear_upper_mounts,
         "rear_lower_arm_mount_geometry": rear_lower_mounts,
+        "mount_position_checks": {
+            "front": {**upper_mounts["FR"]["position_checks"], **lower_mounts["FR"]["position_checks"]},
+            "rear": {**rear_upper_mounts["RR"]["position_checks"], **rear_lower_mounts["RR"]["position_checks"]},
+        },
     }
     return WireframeScene(lines, bounds, vehicle_bounds,
                           settings.front_view_azimuth_deg, settings.front_view_elevation_deg,

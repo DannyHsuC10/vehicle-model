@@ -10,9 +10,11 @@ import math
 
 import numpy as np
 
-from .project import static_objects
+from .project import static_objects, validate, travel_limits
 from .static.fv.wireframe_geometry import build_wireframe_scene
 from .wheel_end_geometry import rotation_matrix
+from . import hardpoints
+from .anti import axle_anti
 
 COLORS = {"upper": "#fbbf24", "lower": "#38bdf8", "upright": "#a78bfa",
           "wheel": "#e2e8f0", "ground": "#64748b", "kingpin": "#fb7185", "force": "#34d399"}
@@ -20,6 +22,12 @@ COLORS = {"upper": "#fbbf24", "lower": "#38bdf8", "upright": "#a78bfa",
 
 class Unreachable(ValueError):
     pass
+
+
+def check_pose_travel(values, bounds):
+    low, high = bounds
+    if any(value < low-1e-5 or value > high+1e-5 for value in values):
+        raise Unreachable(f"此姿態需要行程 {values[0]:.5g} / {values[1]:.5g} mm，超出下垂 {abs(low):.5g} ～ 上壓 {high:.5g} mm。")
 
 
 def intersection(a, b, c, d):
@@ -125,7 +133,7 @@ def frame_axes(frame, span, height):
 class FVMotion:
     def __init__(self, plane):
         # Frozen zero-travel source. Never mutate the authoritative scene.
-        self.zero = {key: np.array(value, copy=True) for key, value in plane.static_pts.items()
+        self.zero = {key: None if value is None else np.array(value, copy=True) for key, value in plane.static_pts.items()
                      if key in ("kua", "lak", "kg", "gnd", "wheel_center", "cpb_rl", "cpb_ru", "IC", "cg", "RC")}
         z = self.zero
         self.lower = np.linalg.norm(z["lak"] - z["cpb_rl"])
@@ -135,6 +143,7 @@ class FVMotion:
         self.theta0 = math.atan2(v[1], v[0])
         self.width, self.radius = plane.helper.tire_width, plane.helper.free_radius
         self.cache = {}
+        self._roll_bounds_cache = {}
 
     def at_angle(self, theta):
         z = self.zero
@@ -185,7 +194,9 @@ class FVMotion:
         metrics = {"travel_left_mm": float(left_mm), "travel_right_mm": float(right_mm),
                    "heave_mm": (left_mm + right_mm)/2, "roll_deg": roll,
                    "camber_left_deg": cl, "camber_right_deg": cr,
+                   **center_metrics("cg", self.zero["cg"], frame),
                    **center_metrics("rc", rc, frame)}
+        metrics["cg_height_mm"] = metrics["cg_y_prime_mm"]
         if gains:
             for label, is_left in (("left", True), ("right", False)):
                 try:
@@ -198,7 +209,9 @@ class FVMotion:
                 except Unreachable:
                     metrics[f"camber_gain_{label}_deg_per_mm"] = None
         lines = []
-        points = {"RC0": self.zero["RC"].tolist(), "CG": self.zero["cg"].tolist()}
+        points = {"CG": self.zero["cg"].tolist()}
+        if self.zero["RC"] is not None:
+            points["RC0"] = self.zero["RC"].tolist()
         for label, state in (("L", left), ("R", right)):
             for a, b, kind in (("cpb_ru", "kua", "upper"), ("cpb_rl", "lak", "lower"),
                                ("kua", "lak", "upright"), ("kg", "kua", "kingpin")):
@@ -219,6 +232,37 @@ class FVMotion:
         return {"metrics": metrics, "lines": lines, "points": points,
                 "frame": frame, "annotations": annotations}
 
+    def roll_bounds(self, heave_mm):
+        """Roll attainable at this heave before either wheel reaches its stroke.
+
+        Mirror symmetry gives opposite angles at opposite differential travels.
+        If the linkage itself cannot reach the requested stroke, approach its
+        continuous reachable boundary from the equal-travel pose.
+        """
+        key = float(heave_mm)
+        if key not in self._roll_bounds_cache:
+            low, high = self.travel_bounds
+            check_pose_travel((heave_mm, heave_mm), (low, high))
+            self.solve(heave_mm, heave_mm, gains=False)
+            delta = max(0., min(heave_mm-low, high-heave_mm))
+            def at_delta(value):
+                return abs(self.solve(heave_mm-value, heave_mm+value, gains=False)["metrics"]["roll_deg"])
+            try:
+                angle = at_delta(delta)
+            except Unreachable:
+                reachable, unreachable = 0., delta
+                angle = 0.
+                for _ in range(30):
+                    mid = (reachable+unreachable)/2
+                    try:
+                        candidate = at_delta(mid)
+                    except Unreachable:
+                        unreachable = mid
+                    else:
+                        reachable, angle = mid, candidate
+            self._roll_bounds_cache[key] = (-float(angle), float(angle))
+        return self._roll_bounds_cache[key]
+
     def pose(self, heave_mm, roll_deg):
         # Contact X moves during travel; iterate the actual track span.
         dz = self.zero["gnd"][0] * 2 * math.tan(math.radians(roll_deg)) * 1000
@@ -226,6 +270,8 @@ class FVMotion:
             l, r = heave_mm - dz/2, heave_mm + dz/2
             state = self.solve(l, r, gains=False)
             if abs(state["metrics"]["roll_deg"]-roll_deg) < 1e-7:
+                if hasattr(self, "travel_bounds"):
+                    check_pose_travel((l, r), self.travel_bounds)
                 return self.solve(l, r)
             span = state["points"]["R_gnd"][0] - state["points"]["L_gnd"][0]
             dz = span * math.tan(math.radians(roll_deg))*1000
@@ -237,11 +283,13 @@ class SVMotion:
         self.template = template
         self.au, self.al = template.kingpin_Au.copy(), template.kingpin_Al.copy()
         self.length = np.linalg.norm(self.au - self.al)
-        self.directions = []
-        for p in (self.au, self.al):
-            radial = template.initial_ic - p
-            radial /= np.linalg.norm(radial)
-            self.directions.append(np.array([-radial[1], radial[0]]))
+        self.directions = getattr(template, "motion_directions", None)
+        if self.directions is None:
+            self.directions = []
+            for p in (self.au, self.al):
+                radial = template.initial_ic - p
+                radial /= np.linalg.norm(radial)
+                self.directions.append(np.array([-radial[1], radial[0]]))
         self.cache = {}
 
     def at_al(self, offset):
@@ -276,12 +324,48 @@ class SVMotion:
 
 class Engine:
     def __init__(self, project):
+        project = validate(project)
         self.project = copy.deepcopy(project)
+        self.travel_bounds = travel_limits(project)
+        self._pitch_angle_limit = None
         self.car, sf, sr = static_objects(project)
-        self.scene = build_wireframe_scene(self.car, sf, sr)
+        if hardpoints.enabled(project):
+            self.scene, self.derived_parameters = hardpoints.build_scene(project, self.car, sf, sr)
+        else:
+            self.scene = build_wireframe_scene(self.car, sf, sr, mount_x=project.get("arm_mount_x"))
+            self.derived_parameters = {axle: copy.deepcopy(project[axle]) for axle in ("front", "rear")}
         self.fv = {axle: FVMotion(self.scene.geometry[axle]) for axle in ("front", "rear")}
+        for solver in self.fv.values():
+            solver.travel_bounds = self.travel_bounds
         sv = self.scene.geometry["side_view"]
         self.sv = {"front": SVMotion(sv.front), "rear": SVMotion(sv.rear)}
+        for axle, solver in self.sv.items():
+            t = solver.template
+            values = axle_anti(axle, t.initial_ic, t.contact_point, t.wheel_center,
+                               self.car.l, self.car.h_cog, project["vehicle"]["brake_bias_front"],
+                               project["vehicle"]["drive_force_front"])
+            self.derived_parameters[axle].update({key: values.get(key) for key in ("anti_dive", "anti_lift", "anti_squat")})
+            self.derived_parameters[axle]["svsa"] = (None if t.initial_ic is None else
+                float(t.direction_sign*(t.initial_ic[0]-t.contact_point[0])))
+
+    def pitch_angle_limit(self):
+        """Reference pitch extent from reachable opposing travel endpoints.
+
+        Smaller endpoint fractions handle mechanisms that cannot reach the
+        requested full stroke. Heave/angle combinations are checked separately.
+        """
+        if self._pitch_angle_limit is None:
+            low, high = self.travel_bounds
+            angles = [0.]
+            for fraction in (1., .75, .5, .25, .1):
+                for first, second in ((low*fraction, high*fraction), (high*fraction, low*fraction)):
+                    try:
+                        state = self.solve_sv(first, second)
+                        angles.append(abs(state["metrics"]["pitch_deg"]))
+                    except Unreachable:
+                        continue
+            self._pitch_angle_limit = float(max(angles))
+        return self._pitch_angle_limit
 
     def solve_sv(self, front_mm, rear_mm):
         states = {"front": self.sv["front"].side(front_mm), "rear": self.sv["rear"].side(rear_mm)}
@@ -290,27 +374,31 @@ class Engine:
         frame = contact_frame(f["contact"], r["contact"])
         pitch = math.atan2(ground[1], ground[0])
         basis = rotate2(-pitch)
+        wheelbase = float(np.linalg.norm(ground))
+        # CG belongs to the rigid body. Its road-relative position changes when
+        # the body is rendered in the current contact frame, just like pickups.
+        cg = np.array([self.sv["front"].template.wheel_center[0]+self.car.lf, self.car.h_cog])
+        cg_height = float(to_contact_frame(cg, frame)[1])
         pc = None if f["ic"] is None or r["ic"] is None else intersection(f["contact"], f["ic"], r["contact"], r["ic"])
         metrics = {"travel_front_mm": front_mm, "travel_rear_mm": rear_mm,
                    "ride_height_front_mm": self.car.bottom*1000-front_mm,
                    "ride_height_rear_mm": self.car.bottom*1000-rear_mm,
                    "heave_mm": (front_mm+rear_mm)/2, "pitch_deg": math.degrees(pitch),
+                   "wheelbase_mm": wheelbase*1000, "cg_height_mm": cg_height*1000,
+                   **center_metrics("cg", cg, frame),
                    **center_metrics("pc", pc, frame)}
         initial_pc = self.scene.geometry["side_view"].local_pitch_center
-        cg = [self.sv["front"].template.wheel_center[0]+self.car.lf, self.car.h_cog]
-        lines, points = [], {"PC0": initial_pc.tolist(), "CG": cg}
+        lines, points = [], {"CG": cg.tolist()}
+        if initial_pc is not None:
+            points["PC0"] = initial_pc.tolist()
         for axle, s in states.items():
             t = self.sv[axle].template
             v = basis @ (s["kt"]-s["kg"])
             metrics[f"caster_{axle}_deg"] = t.direction_sign * math.degrees(math.atan2(v[0], v[1]))
-            for origin_key, prefix in (("contact", "anti_dive"), ("center", "anti_lift")):
-                v = None if s["ic"] is None else basis @ (s["ic"]-s[origin_key])
-                # Retains the source SV design normalization on both axles.
-                bias = self.car.l * t.suspension.front_brake_bias_sv / self.car.h_cog
-                if prefix == "anti_lift":
-                    bias = self.car.l * (1-t.suspension.front_brake_bias_sv) / self.car.h_cog
-                metrics[f"{prefix}_{axle}_pct"] = None if v is None or abs(v[0]) < 1e-12 else float(100*bias*v[1]/(v[0]*t.direction_sign))
-            metrics[f"svsa_{axle}_mm"] = None if s["ic"] is None else float(abs(s["ic"][0]-s["contact"][0])*1000)
+            values = axle_anti(axle, s["ic"], s["contact"], s["center"], wheelbase, cg_height,
+                               self.project["vehicle"]["brake_bias_front"], self.project["vehicle"]["drive_force_front"], basis)
+            metrics.update({f"{key}_{axle}_pct": None if value is None else 100*value for key, value in values.items()})
+            metrics[f"svsa_{axle}_mm"] = None if s["ic"] is None else float(t.direction_sign*(s["ic"][0]-s["contact"][0])*1000)
             for a, b, kind in (("au", "al", "upright"), ("kg", "kt", "kingpin")):
                 lines.append(line([s[a], s[b]], kind))
             if s["ic"] is not None:
@@ -336,6 +424,7 @@ class Engine:
             f, r = heave_mm-dz/2, heave_mm+dz/2
             state = self.solve_sv(f, r)
             if abs(state["metrics"]["pitch_deg"]-pitch_deg) < 1e-7:
+                check_pose_travel((f, r), self.travel_bounds)
                 return state
             span = state["points"]["rear_contact"][0]-state["points"]["front_contact"][0]
             dz = span*math.tan(math.radians(pitch_deg))*1000

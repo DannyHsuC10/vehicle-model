@@ -66,7 +66,12 @@ class LabChart(Chart):
         if spec and "mesh" in spec:
             return self.draw_mesh(spec)
         if not spec or "world_lines" not in spec:
-            return self._draw_flat()
+            self._draw_flat()
+            if spec:
+                if self.view is not None and hasattr(self, "bounds"):
+                    self.draw_annotations(spec, lambda point: point)
+                self.draw_current_status(spec)
+            return
         dimension = spec.get("dimension", 3)
         projection = spec.get("projection", "Iso")
         project = lambda p: tuple(p) if dimension == 2 else self.project(p, projection)
@@ -93,6 +98,13 @@ class LabChart(Chart):
                 if clipped:
                     self.line(clipped, s["color"], s["width"], s["dash"])
         self.draw_annotations(spec, project)
+        self.draw_current_status(spec)
+
+    def draw_current_status(self, spec):
+        if spec.get("current_status"):
+            w = max(self.canvas.winfo_width(), 300)
+            l, t, r, b = self.bounds if self.view is not None and hasattr(self, "bounds") else (0, 40, w, 100)
+            self.text(r-8, t+15, spec["current_status"], "#fbbf24", 10, "e")
 
     def draw_annotations(self, spec, project):
         l, t, r, b = self.bounds
@@ -114,22 +126,37 @@ class LabChart(Chart):
             if radius is not None:
                 hollow = annotation.get("hollow", False)
                 outline = color if hollow else "#f8fafc"
-                self.canvas.create_oval(px-radius, py-radius, px+radius, py+radius,
-                                        fill="" if hollow else color, outline=outline, width=2)
                 self.circles.append((px, py, radius, color, hollow, outline, annotation["name"]))
             dx, dy = annotation.get("offset", [12, -15])
-            self.text(max(l+4, min(r-45, px+dx)), max(t+12, min(b-12, py+dy)),
-                      annotation["name"], color, 11, "w")
+            labels = annotation.get("label_lines", [annotation["name"]])
+            label_width = max(sum(14 if ord(ch) > 255 else 7 for ch in label) for label in labels)
+            x = max(l+4, min(r-label_width-4, px+dx))
+            y = max(t+12, min(b-12-16*(len(labels)-1), py+dy))
+            if "label_lines" in annotation:
+                height = 16*(len(labels)-1)
+                if x-4 <= px <= x+label_width+4 and y-10 <= py <= y+height+10:
+                    y = max(t+12, py-height-22)
+                rectangle = [x-4, y-10, x+label_width+4, y+height+10]
+                self.canvas.create_rectangle(*rectangle, fill=BG, outline=color, width=1)
+                self.primitives.append(("rect", rectangle, BG, 1, color))
+            for index, label in enumerate(labels):
+                self.text(x, y+index*16, label, "#f8fafc" if "label_lines" in annotation else color,
+                          10 if "label_lines" in annotation else 11, "w")
+            if radius is not None:
+                self.canvas.create_oval(px-radius, py-radius, px+radius, py+radius,
+                                        fill="" if hollow else color, outline=outline, width=2)
 
     def draw_mesh(self, spec):
         self.canvas.delete("all")
         self.primitives = []
+        self.polygons, self.circles = [], []
         w, h = max(self.canvas.winfo_width(), 300), max(self.canvas.winfo_height(), 220)
         points = [p for row in spec["mesh"] for p in row if all(self.finite(v) for v in p)]
         self.text(25, 22, spec["title"], "#f8fafc", 14, "w")
         if not points:
             self.text(w/2, h/2, "此範圍沒有可達的幾何姿態")
             self.view = None
+            self.draw_current_status(spec)
             return
         ranges = [(min(p[i] for p in points), max(p[i] for p in points)) for i in range(3)]
         spans = [b-a if b-a > 1e-10 else max(abs(a)*.1, 1e-3) for a, b in ranges]
@@ -176,6 +203,14 @@ class LabChart(Chart):
                 self.text(x+5, y-9, f"{value:.4g}", color, 8)
         self.text(w-20, 48, f"Z: {ranges[2][0]:.5g} → {ranges[2][1]:.5g}", "#cbd5e1", 9, "e")
         self.text(w-20, h-18, "拖曳旋轉 · 滾輪縮放 · 雙擊重設；缺格表示無解 / 無有限交點", "#94a3b8", 9, "e")
+        for marker in spec.get("markers", []):
+            position = marker["position"]
+            bottom = [position[0], position[1], ranges[2][0]]
+            guide = self.clip(screen(norm(bottom)), screen(norm(position)), l, t, r, b)
+            if guide:
+                self.line(guide, "#f8fafc", 1, (3, 4))
+        self.draw_annotations(spec, lambda point: self.project(norm(point), "Iso"))
+        self.draw_current_status(spec)
 
     def hover(self, event):
         if self.spec and "mesh" in self.spec:
@@ -218,6 +253,8 @@ class LabChart(Chart):
                         draw.line([*a, *b], fill=color, width=max(1, round(size*factor)))
                 else:
                     draw.line(scaled, fill=color, width=max(1, round(size*factor)))
+            elif kind == "rect":
+                draw.rectangle(scaled, fill=color, outline=rest[0], width=max(1, round(size*factor)))
             else:
                 content, anchor = rest
                 font = ImageFont.truetype(str(font_path), round(size*1.3*factor)) if font_path.exists() else ImageFont.load_default()

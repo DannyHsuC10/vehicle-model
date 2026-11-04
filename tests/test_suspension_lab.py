@@ -16,7 +16,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from suspension_lab.project import default_project, load_project, save_project, validate, Car, SuspensionF, SuspensionR
+from suspension_lab.project import default_project, load_project, save_project, validate, Car, SuspensionF, SuspensionR, DERIVED_AXLE_FIELDS
 from suspension_lab.engine import Engine, Unreachable, contact_frame, to_contact_frame, rotate2
 from suspension_lab.analysis import calculate_mapping, make_plot, static_point_rows, PLOTS
 from suspension_lab.export import point_rows, write_report
@@ -97,7 +97,7 @@ else:
             self.assertEqual(load_project(path), project)
             original = path.read_bytes()
             for group, key, value in (("front", "kpi_deg", math.nan), ("vehicle", "mass", True),
-                                      ("analysis", "samples", 5.2), ("analysis", "roll_deg", 0)):
+                                      ("analysis", "samples", 5.2), ("analysis", "droop_mm", -1)):
                 bad = copy.deepcopy(project)
                 bad[group][key] = value
                 with self.assertRaises(ValueError):
@@ -189,16 +189,20 @@ class MotionTests(unittest.TestCase):
         self.assertAlmostEqual(pose["pitch_deg"], -.6, places=6)
         self.assertEqual(self.engine.solve_sv(0, 0), baseline)
 
-    def test_svsa_override_remains_in_static_source(self):
+    def test_svsa_and_braking_anti_independently_set_static_ic(self):
         project = default_project()
-        project["front"]["svsa"] = 2.5
         e = Engine(project)
         static = e.scene.geometry["side_view"].front
-        self.assertAlmostEqual(abs(static.initial_ic[0]-static.contact_point[0]), 2.5)
+        distance = abs(static.initial_ic[0]-static.contact_point[0])
         state = e.solve_sv(0, 0)["metrics"]
         self.assertAlmostEqual(state["anti_dive_front_pct"], 20)
-        self.assertAlmostEqual(state["svsa_front_mm"], 2500)
-        self.assertNotAlmostEqual(state["anti_lift_front_pct"], 0)
+        self.assertAlmostEqual(state["svsa_front_mm"], distance*1000)
+        self.assertAlmostEqual(e.derived_parameters["front"]["svsa"], distance)
+        project["front"]["svsa"] = 2.5
+        changed = Engine(project)
+        self.assertNotAlmostEqual(changed.derived_parameters["front"]["svsa"], distance)
+        self.assertAlmostEqual(changed.solve_sv(0, 0)["metrics"]["anti_dive_front_pct"], 20)
+        self.assertAlmostEqual(changed.solve_sv(0, 0)["metrics"]["svsa_front_mm"], 2500)
 
     def test_we_uses_static_axis_and_distinguishes_material_from_contact(self):
         for axle, corner, caster in (("front", "FR", 5), ("rear", "RR", 0)):
@@ -215,7 +219,7 @@ class MotionTests(unittest.TestCase):
 
     def test_mapping_masks_failures_and_has_all_requested_metrics(self):
         p = default_project()
-        p["analysis"].update(samples=5, travel_mm=200)
+        p["analysis"].update(samples=5, bump_mm=200, droop_mm=200)
         e = Engine(p)
         mapping = calculate_mapping(e, "front")
         self.assertEqual(mapping["total"], 25)
@@ -414,6 +418,9 @@ class GuiTests(unittest.TestCase):
                     self.assertIn("<svg", svg)
                     if "mesh" in panel.chart.spec:
                         self.assertIn("<polygon", svg)
+                    if key != "static" and plot != "motion":
+                        self.assertTrue(panel.chart.spec["markers"])
+                        self.assertTrue(panel.chart.circles)
                     png = Path(tmp)/f"{key}_{plot}.png"
                     panel.chart.png(png)
                     self.assertGreater(png.stat().st_size, 1000)
@@ -439,8 +446,7 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(self.app.panels["static"].entries[("front", "rc_height")].get(), "0.048")
         rev = self.app.revision
         invalid = copy.deepcopy(p)
-        invalid["front"]["anti_dive"] = 0
-        invalid["front"]["anti_lift"] = 0
+        invalid["front"]["svsa"] = 0
         with self.assertRaises(ValueError):
             self.app.apply_project(invalid)
         self.assertEqual(self.app.revision, rev)
@@ -450,6 +456,356 @@ class GuiTests(unittest.TestCase):
         self.app.update()
         self.assertEqual(len(editor.entries), sum(map(len, __import__('suspension_lab.project', fromlist=['FIELDS']).FIELDS.values())))
         editor.destroy()
+
+    def test_sv_sliders_move_cg_with_body_in_current_contact_view(self):
+        panel = self.app.panels["sv"]
+        self.app.notebook.select(panel)
+        self.app.update()
+        panel.request()
+        self.wait(panel)
+        cg = lambda: np.array(next(marker["position"] for marker in panel.chart.spec["markers"] if marker["name"] == "CG"))
+        initial, view = cg().copy(), panel.chart.view.copy()
+        for var in panel.controls:
+            var.set(15)
+        panel.slider_changed()
+        self.wait(panel)
+        self.assertAlmostEqual(cg()[1], initial[1]-.015, places=8)
+        self.assertEqual(panel.chart.view, view)
+        self.assertAlmostEqual(panel.state["metrics"]["cg_height_mm"], cg()[1]*1000, places=8)
+        self.assertIn("Current contact frame", panel.chart.spec["xlabel"])
+        panel.controls[0].set(-10)
+        panel.controls[1].set(20)
+        panel.slider_changed()
+        self.wait(panel)
+        self.assertNotAlmostEqual(panel.state["metrics"]["pitch_deg"], 0)
+        row = next(row for row in point_rows(panel.state) if row["name"] == "CG")
+        np.testing.assert_allclose([row["x_prime_m"], row["y_prime_m"]], cg(), atol=1e-12)
+        ground = next(path for path in panel.chart.spec["world_lines"] if path["name"] == "ground")
+        np.testing.assert_allclose(np.array(ground["points"])[:, 1], 0, atol=1e-12)
+
+    def test_mapping_marker_follows_sliders_while_preserving_mesh_cache_and_camera(self):
+        panel = self.app.panels["sv"]
+        self.app.notebook.select(panel)
+        self.app.update()
+        panel.plot.set(dict(PLOTS["sv"])["caster_front_deg"])
+        panel.request()
+        self.wait(panel)
+        initial_point = panel.chart.spec["markers"][0]["position"]
+        np.testing.assert_allclose(initial_point, [50, 50, 5], atol=1e-10)
+        self.assertIn("前／後行程: 0 / 0 mm", panel.chart.spec["markers"][0]["label_lines"])
+        mapping, mesh = panel.mapping, copy.deepcopy(panel.chart.spec["mesh"])
+        panel.chart.azimuth += .2
+        panel.chart.draw()
+        view, camera = panel.chart.view.copy(), (panel.chart.azimuth, panel.chart.elevation)
+        panel.controls[0].set(15)
+        panel.controls[1].set(-10)
+        panel.slider_changed()
+        self.wait(panel)
+        self.assertIs(panel.mapping, mapping)
+        self.assertEqual(panel.chart.spec["mesh"], mesh)
+        self.assertEqual(panel.chart.view, view)
+        self.assertEqual((panel.chart.azimuth, panel.chart.elevation), camera)
+        self.assertEqual(len(panel.chart.circles), 1)
+        np.testing.assert_allclose(panel.chart.spec["markers"][0]["position"],
+                                   [35, 60, panel.state["metrics"]["caster_front_deg"]], atol=1e-8)
+        self.assertNotEqual(initial_point, panel.chart.spec["markers"][0]["position"])
+        panel.plot.set(dict(PLOTS["sv"])["pc_map"])
+        panel.request()
+        self.wait(panel)
+        self.assertIs(panel.mapping, mapping)
+        np.testing.assert_allclose(panel.chart.spec["markers"][0]["position"],
+                                   [panel.state["metrics"]["pc_x_prime_mm"], panel.state["metrics"]["pc_y_prime_mm"]])
+        self.assertEqual(len(panel.chart.circles), 1)
+
+    def test_hardpoint_editor_mirrors_commits_and_renders_all_pages(self):
+        from suspension_lab.gui import ParameterEditor
+        from suspension_lab import hardpoints
+        original = copy.deepcopy(self.app.project)
+        editor = ParameterEditor(self.app)
+        self.app.update()
+        self.assertFalse(editor.hardpoint_mode.get())
+        self.assertEqual(sum(len(editor.hardpoint_tree.get_children(c)) for c in hardpoints.CORNERS), 24)
+        editor.hardpoint_check.invoke()
+        self.assertEqual(str(editor.entry_widgets[("front", "kpi_deg")].cget("state")), "disabled")
+        edited = (np.array(editor.point_data["FR"]["UBJ"]) + [-.005, .003, .002]).tolist()
+        editor.set_hardpoint("FR", "UBJ", edited)
+        np.testing.assert_array_equal(editor.point_data["FL"]["UBJ"], np.array(edited)*[1, -1, 1])
+        self.assertEqual(self.app.project, original)
+        self.assertEqual(len(editor.derived_tree.get_children()), len(DERIVED_AXLE_FIELDS))
+        saved = copy.deepcopy(editor.point_data)
+        editor.apply()
+        self.assertFalse(editor.winfo_exists())
+        self.assertTrue(hardpoints.enabled(self.app.project))
+        self.assertEqual(self.app.engine.scene.geometry["hardpoints"], saved)
+        self.assertEqual(self.app.project["front"], original["front"])
+        self.assertEqual(str(self.app.panels["front"].entry_widgets[("front", "kpi_deg")].cget("state")), "disabled")
+        # Disabled derived values must not overwrite the retained parameter design.
+        self.app.panels["front"].apply()
+        self.assertEqual(self.app.project["front"], original["front"])
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as tmp:
+            for key, panel in self.app.panels.items():
+                self.app.notebook.select(panel)
+                self.app.update()
+                for plot, label in PLOTS[key]:
+                    panel.plot.set(label)
+                    panel.request()
+                    self.wait(panel)
+                    self.assertIn("<svg", panel.chart.svg())
+                path = Path(tmp)/(key+".html")
+                self.app.perform_export("report", path, panel)
+                import html
+                self.assertIn('"hardpoints"', html.unescape(path.read_text(encoding="utf-8")))
+                panel.chart.png(Path(tmp)/(key+".png"))
+        # Reopening keeps all edited XYZ; switching back restores parameter solving.
+        editor = ParameterEditor(self.app)
+        self.assertEqual(editor.point_data, saved)
+        editor.hardpoint_check.invoke()
+        editor.apply()
+        self.assertFalse(hardpoints.enabled(self.app.project))
+        self.assertEqual(self.app.project["hardpoints"]["corners"], saved)
+        self.assertAlmostEqual(self.app.engine.fv["front"].solve(0, 0)["metrics"]["rc_y_prime_mm"], 35)
+
+    def test_invalid_hardpoint_draft_and_cancel_preserve_applied_project(self):
+        from suspension_lab.gui import ParameterEditor
+        original = copy.deepcopy(self.app.project)
+        revision = self.app.revision
+        editor = ParameterEditor(self.app)
+        editor.entries[("front", "kpi_deg")].set("14")
+        editor.hardpoint_check.invoke()
+        self.assertAlmostEqual(float(editor.derived_tree.item("kpi_deg", "values")[0]), 14)
+        editor.set_hardpoint("FL", "UCA_F", editor.point_data["FL"]["UCA_R"])
+        self.assertIn("重合", editor.derivation_message.get())
+        with patch("suspension_lab.gui.messagebox.showerror") as error:
+            editor.apply()
+        error.assert_called_once()
+        self.assertEqual(self.app.revision, revision)
+        self.assertEqual(self.app.project, original)
+        self.assertTrue(editor.winfo_exists())
+        editor.destroy()
+        self.assertEqual(self.app.project, original)
+
+    def test_parameter_preview_refreshes_vehicle_changes_without_applying(self):
+        from suspension_lab.gui import ParameterEditor
+        original = copy.deepcopy(self.app.project)
+        editor = ParameterEditor(self.app)
+        initial_anti = float(editor.derived_tree.item("anti_dive", "values")[0])
+
+        def wait_for(condition):
+            end = time.monotonic()+3
+            while not condition() and time.monotonic() < end:
+                self.app.update()
+                time.sleep(.01)
+            self.assertTrue(condition())
+
+        bias = editor.entries[("vehicle", "brake_bias_front")]
+        bias.set("0.6")
+        expected = initial_anti*.6/original["vehicle"]["brake_bias_front"]
+        wait_for(lambda: bool(editor.derived_tree.get_children()) and
+                 abs(float(editor.derived_tree.item("anti_dive", "values")[0])-expected) < 1e-7)
+        self.assertEqual(self.app.project, original)
+        bias.set("")
+        wait_for(lambda: "需要數值" in editor.derivation_message.get())
+        bias.set("0.5")
+        wait_for(lambda: "硬點幾何有效" in editor.derivation_message.get())
+        self.assertEqual(self.app.project, original)
+        with patch.object(self.app, "report_callback_exception") as callback_error:
+            bias.set("0.4")
+            editor.destroy()
+            end = time.monotonic()+.3
+            while time.monotonic() < end:
+                self.app.update()
+                time.sleep(.01)
+            callback_error.assert_not_called()
+
+    def test_mount_x_fields_show_limits_excess_and_applied_fallback(self):
+        from suspension_lab.gui import ParameterEditor
+        editor = ParameterEditor(self.app)
+        self.assertEqual(len(editor.mount_x_entries), 8)
+        original = copy.deepcopy(self.app.project)
+
+        def wait_for(condition):
+            end = time.monotonic()+3
+            while not condition() and time.monotonic() < end:
+                self.app.update()
+                time.sleep(.01)
+            self.assertTrue(condition(), editor.derivation_message.get())
+
+        front = editor.mount_x_entries[("front", "upper_front_x")]
+        rear = editor.mount_x_entries[("front", "upper_rear_x")]
+        front.set("200")
+        rear.set("-200")
+        wait_for(lambda: abs(editor.point_data["FR"]["UCA_F"][0]-.2) < 1e-12)
+        self.assertAlmostEqual(editor.point_data["FR"]["UCA_R"][0], -.2)
+        self.assertIn("實際使用 X：200.000000 mm", editor.mount_x_labels[("front", "upper_front_x")].cget("text"))
+        self.assertEqual(self.app.project, original)
+        baseline = self.app.engine.scene.geometry["mount_position_checks"]["front"]["upper_front_x"]
+        front.set(str((baseline["limit_max_x"]+.01)*1000))
+        wait_for(lambda: "超過極限範圍 10 mm" in editor.mount_x_labels[("front", "upper_front_x")].cget("text"))
+        self.assertAlmostEqual(editor.point_data["FR"]["UCA_F"][0], baseline["limit_max_x"])
+        self.assertAlmostEqual(editor.point_data["FR"]["UCA_R"][0], baseline["limit_min_x"])
+        self.assertEqual(float(rear.get()), -200)
+        editor.apply()
+        self.assertFalse(editor.winfo_exists())
+        checks = self.app.engine.scene.geometry["mount_position_checks"]["front"]
+        self.assertTrue(checks["upper_front_x"]["fallback"])
+        self.assertAlmostEqual(self.app.project["arm_mount_x"]["front"]["upper_front_x"], baseline["limit_max_x"]+.01)
+        editor = ParameterEditor(self.app)
+        self.assertIn("超過極限範圍 10 mm", editor.mount_x_labels[("front", "upper_front_x")].cget("text"))
+        editor.hardpoint_check.invoke()
+        self.assertTrue(all(str(entry.cget("state")) == "disabled" for entry in editor.mount_x_widgets.values()))
+        editor.destroy()
+
+    def test_split_travel_fields_and_auto_pose_ranges_replace_redundant_inputs(self):
+        from suspension_lab.gui import ParameterEditor
+        editor = ParameterEditor(self.app)
+        self.assertIn(("analysis", "bump_mm"), editor.entries)
+        self.assertIn(("analysis", "droop_mm"), editor.entries)
+        self.assertNotIn(("analysis", "roll_deg"), editor.entries)
+        self.assertNotIn(("analysis", "pitch_deg"), editor.entries)
+        self.assertIn(("front", "svsa"), editor.entries)
+        self.assertIn(("rear", "svsa"), editor.entries)
+        self.assertIn(("vehicle", "drive_force_front"), editor.entries)
+        self.assertIn(("front", "anti_lift"), editor.entries)
+        self.assertNotIn(("rear", "anti_dive"), editor.entries)
+        self.assertTrue(editor.derived_tree.exists("svsa"))
+        editor.entries[("analysis", "bump_mm")].set("40")
+        editor.entries[("analysis", "droop_mm")].set("10")
+        editor.apply()
+        self.assertEqual(self.app.project["schema_version"], 4)
+        for page in ("front", "rear", "sv"):
+            panel = self.app.panels[page]
+            self.app.notebook.select(panel)
+            self.app.update()
+            panel.request()
+            self.wait(panel)
+            for scale in panel.sliders:
+                self.assertEqual(float(scale.cget("from")), -10)
+                self.assertEqual(float(scale.cget("to")), 40)
+            if page == "sv":
+                self.assertIn(("front", "svsa"), panel.entries)
+                self.assertIn(("vehicle", "drive_force_front"), panel.entries)
+            panel.mode.set("Heave / Pitch" if page == "sv" else "Heave / Roll")
+            panel.change_mode()
+            self.wait(panel)
+            self.assertEqual(float(panel.sliders[0].cget("from")), -10)
+            self.assertEqual(float(panel.sliders[0].cget("to")), 40)
+            if page == "sv":
+                limit = self.app.engine.pitch_angle_limit()
+                low, high = -limit, limit
+            else:
+                low, high = self.app.engine.fv[page].roll_bounds(0)
+            self.assertAlmostEqual(float(panel.sliders[1].cget("from")), low)
+            self.assertAlmostEqual(float(panel.sliders[1].cget("to")), high)
+
+    def test_heave_roll_controls_shrink_to_each_wheel_stroke_and_surface_keeps_live_marker(self):
+        project = copy.deepcopy(self.app.project)
+        project["analysis"].update(bump_mm=40, droop_mm=10, samples=5)
+        self.app.apply_project(project)
+        for axle in ("front", "rear"):
+            panel = self.app.panels[axle]
+            self.app.notebook.select(panel)
+            panel.mode.set("Heave / Roll")
+            panel.plot.set(dict(PLOTS[axle])["camber_left_deg"])
+            panel.change_mode()
+            self.wait(panel)
+            mapping = panel.mapping
+            for heave in (15, 35, 40, -10, 0):
+                panel.controls[0].set(heave)
+                panel.controls[1].set(10.)  # Requests beyond stroke must clamp.
+                panel.slider_changed()
+                self.wait(panel)
+                self.assertIsNone(panel.error)
+                m = panel.state["metrics"]
+                self.assertTrue(all(-10-1e-5 <= m[key] <= 40+1e-5 for key in ("travel_left_mm", "travel_right_mm")))
+                self.assertLess(min(abs(m[key]-bound) for key in ("travel_left_mm", "travel_right_mm") for bound in (-10, 40)), 1e-5)
+                self.assertIs(panel.mapping, mapping)
+                point = panel.chart.spec["markers"][0]["position"]
+                np.testing.assert_allclose(point, [heave, m["roll_deg"], m["camber_left_deg"]], atol=1e-6)
+                self.assertEqual(panel.sliders[1].instate(["disabled"]), heave in (-10, 40))
+
+    def test_drive_anti_targets_preview_and_commit_with_dependent_svsa(self):
+        from suspension_lab.gui import ParameterEditor
+        from suspension_lab.project import MOUNT_X_FIELDS
+        project = copy.deepcopy(self.app.project)
+        project["vehicle"]["drive_force_front"] = .25
+        project["front"]["svsa"] = 2.5
+        project["rear"]["svsa"] = 3.
+        project["front"]["anti_lift"] = .03
+        project["rear"]["anti_squat"] = .02
+        project["arm_mount_x"] = {axle: {key: None for key in MOUNT_X_FIELDS} for axle in ("front", "rear")}
+        project["arm_mount_x"]["front"]["upper_front_x"] = .2001234567890123
+        self.app.apply_project(project)
+        before = self.app.engine.solve_sv(0, 0)["metrics"]
+        editor = ParameterEditor(self.app)
+        self.assertIn(("front", "anti_dive"), editor.entries)
+        self.assertIn(("rear", "anti_lift"), editor.entries)
+        self.assertIn(("front", "anti_lift"), editor.entries)
+        self.assertEqual(str(editor.entry_widgets[("front", "anti_lift")].cget("state")), "normal")
+        self.assertEqual(str(editor.entry_widgets[("front", "svsa")].cget("state")), "readonly")
+        value = float(editor.derived_tree.item("anti_lift", "values")[0])
+        self.assertNotAlmostEqual(value, 0)
+        editor.entries[("vehicle", "drive_force_front")].set("0.5")
+        deadline = time.time()+3
+        while time.time() < deadline:
+            self.app.update()
+            values = editor.derived_tree.item("anti_lift", "values")
+            svsa = editor.derived_tree.item("svsa", "values")
+            if values and svsa and abs(float(svsa[0])*1000-before["svsa_front_mm"]) > 1:
+                break
+            time.sleep(.01)
+        self.assertAlmostEqual(float(editor.derived_tree.item("anti_lift", "values")[0]), value, places=7)
+        self.assertEqual(float(editor.entries[("vehicle", "brake_bias_front")].get()), .7)
+        self.assertEqual(self.app.project["vehicle"]["drive_force_front"], .25)
+        editor.apply()
+        self.assertEqual(self.app.project["vehicle"]["drive_force_front"], .5)
+        after = self.app.engine.solve_sv(0, 0)["metrics"]
+        self.assertAlmostEqual(after["anti_lift_front_pct"], 3)
+        self.assertAlmostEqual(after["anti_squat_rear_pct"], 2)
+        self.assertNotAlmostEqual(after["svsa_front_mm"], before["svsa_front_mm"])
+        self.assertEqual(self.app.project["arm_mount_x"], project["arm_mount_x"])
+        self.assertAlmostEqual(after["anti_lift_rear_pct"], before["anti_lift_rear_pct"], places=10)
+        panel = self.app.panels["sv"]
+        self.app.notebook.select(panel)
+        for key in ("anti_lift_front_pct", "anti_lift_rear_pct", "anti_squat_rear_pct"):
+            panel.plot.set(dict(PLOTS["sv"])[key])
+            panel.request()
+            self.wait(panel)
+            self.assertIsNone(panel.error)
+            self.assertTrue(panel.chart.spec["markers"])
+
+    def test_zero_drive_switches_editable_inputs_and_preserves_that_axle_ic(self):
+        from suspension_lab.gui import ParameterEditor
+        editor = ParameterEditor(self.app)
+        for new in (.4, 0., 1., .3):
+            old = editor._input_drive_front
+            previous = Engine(editor.candidate(False))
+            previous_ic = {axle: previous.sv[axle].template.initial_ic.copy() for axle in ("front", "rear")}
+            editor.entries[("vehicle", "drive_force_front")].set(str(new))
+            deadline = time.time()+3
+            while time.time() < deadline:
+                self.app.update()
+                if editor._preview_timer is None:
+                    break
+                time.sleep(.01)
+            current = Engine(editor.candidate(False))
+            for axle, old_share, share in (("front", old, new), ("rear", 1-old, 1-new)):
+                key = "anti_lift" if axle == "front" else "anti_squat"
+                self.assertEqual(str(editor.entry_widgets[(axle, "svsa")].cget("state")), "normal" if share == 0 else "readonly")
+                self.assertEqual(str(editor.entry_widgets[(axle, key)].cget("state")), "readonly" if share == 0 else "normal")
+                if (old_share == 0) != (share == 0):
+                    np.testing.assert_allclose(current.sv[axle].template.initial_ic, previous_ic[axle], atol=1e-9)
+                if share == 0:
+                    self.assertEqual(float(editor.entries[(axle, key)].get()), 0)
+        editor.apply()
+        panel = self.app.panels["sv"]
+        self.app.notebook.select(panel)
+        panel.entries[("vehicle", "drive_force_front")].set("1")
+        self.assertEqual(str(panel.entry_widgets[("front", "svsa")].cget("state")), "readonly")
+        self.assertEqual(str(panel.entry_widgets[("rear", "svsa")].cget("state")), "normal")
+        self.assertEqual(str(panel.entry_widgets[("rear", "anti_squat")].cget("state")), "readonly")
+        panel.apply()
+        self.assertEqual(self.app.project["vehicle"]["drive_force_front"], 1)
+        self.assertEqual(self.app.engine.solve_sv(0, 0)["metrics"]["anti_squat_rear_pct"], 0)
 
     def test_sliders_preserve_viewport_zoom_pan_and_3d_camera(self):
         for key in ("front", "rear", "sv", "we"):

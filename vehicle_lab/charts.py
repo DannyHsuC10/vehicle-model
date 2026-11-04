@@ -202,6 +202,8 @@ class Chart(ttk.Frame):
                 dash=rest[0] if rest else ()
                 pattern=' stroke-dasharray="'+" ".join(str(d) for d in dash)+'"' if dash else ""
                 elements.append(f'<polyline points="{coords}" fill="none" stroke="{color}" stroke-width="{size}"{pattern}/>')
+            elif kind=="rect":
+                elements.append(f'<rect x="{xy[0]:.2f}" y="{xy[1]:.2f}" width="{xy[2]-xy[0]:.2f}" height="{xy[3]-xy[1]:.2f}" fill="{color}" stroke="{rest[0]}" stroke-width="{size}"/>')
             else:
                 content,anchor=rest
                 alignment="end" if anchor=="e" else "start" if anchor=="w" else "middle"
@@ -226,6 +228,8 @@ class Chart(ttk.Frame):
                 else:
                     for a,b in self.dashed_segments(scaled,[d*factor for d in dash]):
                         draw.line([*a,*b],fill=color,width=max(1,int(size*factor)))
+            elif kind=="rect":
+                draw.rectangle(scaled,fill=color,outline=rest[0],width=max(1,int(size*factor)))
             else:
                 text,anchor=rest
                 font=ImageFont.truetype(str(font_path),int(size*1.3*factor)) if font_path.exists() else ImageFont.load_default()
