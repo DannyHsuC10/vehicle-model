@@ -8,7 +8,7 @@
     "free_radius": 0.20574, "tire_stiffness": 80185.0,
     "tire_width": 0.1905, "rim_inner_diameter": 0.244475,
     "rim_gap": 0.02, "clearance_steer_deg": 36.0, "brake_bias_front": 0.7,
-    "drive_force_front": 0.0
+    "drive_force_front": 0.5
   },
   "front": {
     "fvsa": 1.0, "rc_height": 0.035, "kpi_deg": 12.0, "scrub_radius": 0.025,
@@ -28,5 +28,15 @@
     "bump_mm": 25.0, "droop_mm": 25.0,
     "steer_deg": 30.0, "caster_min_deg": -5.0, "caster_max_deg": 15.0,
     "samples": 21
+  },
+  "arm_mount_x": {
+    "front": {
+      "upper_front_x": null, "upper_rear_x": null,
+      "lower_front_x": null, "lower_rear_x": null
+    },
+    "rear": {
+      "upper_front_x": null, "upper_rear_x": null,
+      "lower_front_x": null, "lower_rear_x": null
+    }
   }
 }

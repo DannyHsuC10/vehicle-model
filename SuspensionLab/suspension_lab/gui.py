@@ -14,11 +14,45 @@ from .project import (FIELDS, DERIVED_AXLE_FIELDS, MOUNT_X_FIELDS, mount_x_setti
 from .engine import Engine, Unreachable
 from .analysis import PAGES, PLOTS, NOTES, calculate_mapping, make_plot, static_point_rows
 from .charts import LabChart
-from .export import point_rows, write_report, write_csv
+from .export import STEP_PAGES, point_rows, write_report, write_csv, write_step
 from . import hardpoints
 from .anti import anti_ratio
+from .input_limits import FIELD_LIMITS, NAME_MAX_LENGTH, range_hint
 
 FRAME_INTERVAL_MS = 16
+
+
+def show_input_range(parent, entry, var, group, key):
+    """Allow intermediate typing; flag drafts and reject them on commit."""
+    hint = range_hint(group, key, FIELDS[group][key][1])
+    label = ttk.Label(parent, text=hint, foreground="#64748b", wraplength=280)
+    label.pack(fill="x", pady=(0, 4))
+    label.bind("<Configure>", lambda event: label.configure(wraplength=max(180, event.width-4)))
+    entry.range_label = label
+
+    def refresh(*_):
+        readonly = str(entry.cget("state")) in ("disabled", "readonly")
+        try:
+            valid = readonly or FIELD_LIMITS[group][key].accepts(float(var.get()))
+        except ValueError:
+            valid = False
+        entry.configure(style="TEntry" if valid else "Invalid.TEntry")
+        label.configure(text=hint + ("；請修正輸入" if not valid else ""),
+                        foreground="#64748b" if valid else "#b45309")
+
+    var.trace_add("write", refresh)
+    entry.bind("<FocusOut>", refresh, add=True)
+    refresh()
+
+
+def check_mount_inputs(engine):
+    """Preview may fall back to safe extrema; committing must be explicit."""
+    if hardpoints.enabled(engine.project):
+        return
+    for axle, checks in engine.scene.geometry.get("mount_position_checks", {}).items():
+        for key, check in checks.items():
+            if check["requested_x"] is not None and check["fallback"]:
+                raise ValueError(f"{axle} · {MOUNT_X_FIELDS[key]}：{check['message']} 請修正輸入，或留白使用極限。")
 
 
 def field_entries(parent, project, groups, widgets=None):
@@ -33,6 +67,7 @@ def field_entries(parent, project, groups, widgets=None):
             var = tk.StringVar(value=f"{project[group][key]:.10g}")
             entry = ttk.Entry(row, textvariable=var, width=12)
             entry.pack(side="right", padx=(6, 0))
+            show_input_range(parent, entry, var, group, key)
             if widgets is not None:
                 widgets[(group, key)] = entry
             variables[(group, key)] = var
@@ -113,6 +148,7 @@ class ParameterEditor(tk.Toplevel):
         ttk.Label(name_row, text="專案名稱").pack(side="left")
         self.name = tk.StringVar(value=app.project["name"])
         ttk.Entry(name_row, textvariable=self.name).pack(side="left", fill="x", expand=True, padx=10)
+        ttk.Label(name_row, text=f"1～{NAME_MAX_LENGTH} 字元").pack(side="right")
         self.hardpoint_mode = tk.BooleanVar(value=hardpoints.enabled(app.project))
         self.point_data = copy.deepcopy(app.project["hardpoints"]["corners"]) if "hardpoints" in app.project else hardpoints.from_scene(app.engine.scene)
         self.points_edited = "hardpoints" in app.project
@@ -159,7 +195,7 @@ class ParameterEditor(tk.Toplevel):
         ttk.Label(parent, text="A 臂車身接點 · 全車縱向 X", font=("Microsoft JhengHei UI", 11, "bold"),
                   padding=(0, 16, 0, 6)).pack(anchor="w")
         ttk.Label(parent, text="單位 mm；空白使用輪圈避讓極限。X 向前，後接點 X 必須小於前接點 X。\n"
-                  "沿用 FV 接點指定的全車 Y，以 A 臂平面解 Z；同一支臂任何接點違規時，兩點皆回到極限。",
+                  "沿用 FV 接點指定的全車 Y，以 A 臂平面解 Z；違規時預覽退回極限，套用前須修正或留白。",
                   wraplength=850).pack(anchor="w", pady=(0, 6))
         for key, label in MOUNT_X_FIELDS.items():
             field = (axle, key)
@@ -170,7 +206,7 @@ class ParameterEditor(tk.Toplevel):
             var = tk.StringVar(value="" if value is None else f"{value*1000:.12g}")
             entry = ttk.Entry(row, textvariable=var, width=16)
             entry.pack(side="right", padx=(6, 0))
-            status = ttk.Label(parent, text="", wraplength=850, foreground="#475569")
+            status = ttk.Label(parent, text="空白：自動採用幾何極限接點。", wraplength=850, foreground="#475569")
             status.pack(fill="x", pady=(2, 4))
             self.mount_x_entries[field], self.mount_x_widgets[field], self.mount_x_labels[field] = var, entry, status
 
@@ -234,7 +270,7 @@ class ParameterEditor(tk.Toplevel):
         result = read_entries(base, self.entries, drive_override)
         result["hardpoints"]["enabled"] = self.hardpoint_mode.get() if mode is None else mode
         result["name"] = self.name.get().strip()
-        return result
+        return validate(result)
 
     def change_geometry_mode(self):
         if self.hardpoint_mode.get() and not self.points_edited:
@@ -274,7 +310,7 @@ class ParameterEditor(tk.Toplevel):
             return
         corner, name = row.split("/")
         point = self.point_data[corner][name]
-        raw = simpledialog.askstring("編輯懸吊硬點", f"{corner}/{name}：X, Y, Z（mm）；對側會同步鏡射。",
+        raw = simpledialog.askstring("編輯懸吊硬點", f"{corner}/{name}：X, Y, Z（mm）；對側會同步鏡射。\n不設數值上下界；請輸入三個有限座標。",
                                      initialvalue=", ".join(f"{x*1000:.12g}" for x in point), parent=self)
         if raw is None:
             return
@@ -731,11 +767,13 @@ class App(tk.Tk):
         style.configure("TButton", padding=(9, 5), font=("Microsoft JhengHei UI", 10))
         style.configure("TNotebook.Tab", padding=(22, 9), font=("Microsoft JhengHei UI", 11))
         style.configure("TEntry", fieldbackground="#ffffff", foreground="#0f172a")
+        style.configure("Invalid.TEntry", fieldbackground="#fff7ed", foreground="#9a3412")
         style.map("TEntry",
                   fieldbackground=[("disabled", "#cbd5e1"), ("readonly", "#e2e8f0")],
                   foreground=[("disabled", "#475569"), ("readonly", "#475569")])
         self.project = copy.deepcopy(validate(project or default_project()))
         self.engine = Engine(self.project)
+        check_mount_inputs(self.engine)
         self.revision = 0
         self.dirty = self.closing = False
         self.path = None
@@ -754,12 +792,14 @@ class App(tk.Tk):
         self.panels = {key: Panel(self, key) for key in PAGES}
         for key, panel in self.panels.items():
             self.notebook.add(panel, text=PAGES[key])
-        self.notebook.bind("<<NotebookTabChanged>>", lambda event: self.active.request())
         footer = ttk.Frame(self, padding=(12, 8))
         footer.pack(side="bottom", fill="x")
         for kind, label in (("state", "姿態 CSV"), ("points", "硬點 CSV"), ("mapping", "範圍 CSV"),
                             ("png", "PNG 圖片"), ("svg", "SVG 向量圖"), ("report", "HTML 報告 / PDF")):
             ttk.Button(footer, text=label, command=lambda k=kind: self.export(k)).pack(side="left", padx=3)
+        self.step_button = ttk.Button(footer, text="STEP 線框", command=lambda: self.export("step"))
+        self.step_button.pack(side="left", padx=3)
+        self.notebook.bind("<<NotebookTabChanged>>", self.change_page)
         self.status = tk.StringVar(value="靜態幾何已建立")
         ttk.Label(self, textvariable=self.status, padding=(16, 4), foreground="#475569").pack(side="bottom", fill="x")
         self.notebook.pack(fill="both", expand=True, padx=12)
@@ -774,6 +814,11 @@ class App(tk.Tk):
     @property
     def active(self):
         return self.nametowidget(self.notebook.select())
+
+    def change_page(self, _event):
+        panel = self.active
+        self.step_button.state(["!disabled" if panel.key in STEP_PAGES else "disabled"])
+        panel.request()
 
     def worker(self):
         while True:
@@ -796,6 +841,7 @@ class App(tk.Tk):
     def apply_project(self, candidate, mark_dirty=True):
         # Build everything before committing, so invalid geometry is transactional.
         engine = Engine(candidate)
+        check_mount_inputs(engine)
         self.project, self.engine = copy.deepcopy(engine.project), engine
         self.revision += 1
         self.mapping_cache = {}
@@ -847,19 +893,23 @@ class App(tk.Tk):
 
     def export(self, kind):
         panel = self.active
+        if kind == "step" and panel.key not in STEP_PAGES:
+            self.status.set("STEP 匯出適用於前 FV、後 FV、SV 與靜態全車。")
+            return
         if kind == "mapping" and panel.key == "static":
             self.status.set("靜態全車請使用硬點 CSV；範圍掃描在 FV / SV / WE3D 頁。")
             return
         if not getattr(panel, "ready_for_export", False):
             self.status.set("正在計算目前姿態，完成後即可匯出。")
             return
-        if kind in ("state", "points") and not panel.state:
+        if kind in ("state", "points", "step") and not panel.state:
             self.status.set("目前姿態無解；請調整滑桿後再匯出。")
             return
         if kind in ("png", "svg", "report") and panel.chart.spec is None:
             self.status.set("目前沒有可匯出的圖表。")
             return
-        extension = {"state": ".csv", "points": ".csv", "mapping": ".csv", "png": ".png", "svg": ".svg", "report": ".html"}[kind]
+        extension = {"state": ".csv", "points": ".csv", "mapping": ".csv", "png": ".png",
+                     "svg": ".svg", "report": ".html", "step": ".step"}[kind]
         path = filedialog.asksaveasfilename(parent=self, defaultextension=extension,
                     initialfile=f"suspension_{panel.key}_{kind}{extension}", filetypes=[(extension, "*"+extension)])
         if not path:
@@ -880,6 +930,8 @@ class App(tk.Tk):
                 panel.chart.png(path)
             elif kind == "svg":
                 Path(path).write_text(panel.chart.svg(), encoding="utf-8")
+            elif kind == "step":
+                write_step(path, self.engine, panel.key, panel.state, show_construction=panel.construction.get())
             else:
                 controls = {"sliders": [v.get() for v in panel.controls], "mode": panel.mode.get(), "axle": panel.axle.get(), "plot": panel.plot_key}
                 if panel.key == "static":

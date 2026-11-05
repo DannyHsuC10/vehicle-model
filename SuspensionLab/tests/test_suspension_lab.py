@@ -192,6 +192,7 @@ class MotionTests(unittest.TestCase):
 
     def test_svsa_and_braking_anti_independently_set_static_ic(self):
         project = default_project()
+        project["vehicle"]["drive_force_front"] = 0.
         e = Engine(project)
         static = e.scene.geometry["side_view"].front
         distance = abs(static.initial_ic[0]-static.contact_point[0])
@@ -435,6 +436,25 @@ class GuiTests(unittest.TestCase):
                     with path.open(encoding="utf-8-sig", newline="") as handle:
                         self.assertEqual(len(list(csv.DictReader(handle))), panel.mapping["total"])
 
+    def test_step_button_exports_selected_page_even_from_analysis_chart(self):
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as tmp:
+            for key, panel in self.app.panels.items():
+                with self.subTest(page=key):
+                    self.app.notebook.select(panel)
+                    self.app.update()
+                    if key == "we":
+                        self.assertTrue(self.app.step_button.instate(["disabled"]))
+                        continue
+                    if key != "static":
+                        panel.plot.set(PLOTS[key][1][1])
+                        panel.request()
+                    self.wait(panel)
+                    path = Path(tmp) / f"{key}.step"
+                    with patch("suspension_lab.gui.filedialog.asksaveasfilename", return_value=str(path)) as save:
+                        self.app.step_button.invoke()
+                    self.assertEqual(save.call_args.kwargs["defaultextension"], ".step")
+                    self.assertIn("GEOMETRIC_CURVE_SET", path.read_text(encoding="ascii"))
+
     def test_parameter_commit_invalidates_pages_and_rejects_invalid_geometry(self):
         panel = self.app.active
         self.wait(panel)
@@ -447,6 +467,7 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(self.app.panels["static"].entries[("front", "rc_height")].get(), "0.048")
         rev = self.app.revision
         invalid = copy.deepcopy(p)
+        invalid["vehicle"]["drive_force_front"] = 0.
         invalid["front"]["svsa"] = 0
         with self.assertRaises(ValueError):
             self.app.apply_project(invalid)
@@ -618,7 +639,7 @@ class GuiTests(unittest.TestCase):
                 time.sleep(.01)
             callback_error.assert_not_called()
 
-    def test_mount_x_fields_show_limits_excess_and_applied_fallback(self):
+    def test_mount_x_fields_preview_fallback_but_reject_invalid_commit(self):
         from suspension_lab.gui import ParameterEditor
         editor = ParameterEditor(self.app)
         self.assertEqual(len(editor.mount_x_entries), 8)
@@ -645,13 +666,19 @@ class GuiTests(unittest.TestCase):
         self.assertAlmostEqual(editor.point_data["FR"]["UCA_F"][0], baseline["limit_max_x"])
         self.assertAlmostEqual(editor.point_data["FR"]["UCA_R"][0], baseline["limit_min_x"])
         self.assertEqual(float(rear.get()), -200)
+        with patch("suspension_lab.gui.messagebox.showerror") as error:
+            editor.apply()
+        error.assert_called_once()
+        self.assertTrue(editor.winfo_exists())
+        self.assertEqual(self.app.project, original)
+        front.set("")
         editor.apply()
         self.assertFalse(editor.winfo_exists())
         checks = self.app.engine.scene.geometry["mount_position_checks"]["front"]
-        self.assertTrue(checks["upper_front_x"]["fallback"])
-        self.assertAlmostEqual(self.app.project["arm_mount_x"]["front"]["upper_front_x"], baseline["limit_max_x"]+.01)
+        self.assertFalse(checks["upper_front_x"]["fallback"])
+        self.assertIsNone(self.app.project["arm_mount_x"]["front"]["upper_front_x"])
+        self.assertEqual(self.app.project["arm_mount_x"]["front"]["upper_rear_x"], -.2)
         editor = ParameterEditor(self.app)
-        self.assertIn("超過極限範圍 10 mm", editor.mount_x_labels[("front", "upper_front_x")].cget("text"))
         editor.hardpoint_check.invoke()
         self.assertTrue(all(str(entry.cget("state")) == "disabled" for entry in editor.mount_x_widgets.values()))
         editor.destroy()

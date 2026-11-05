@@ -1,12 +1,18 @@
-"""Portable reports include the exact project, pose and mapping provenance."""
+"""Export project results as CSV, HTML reports and STEP wireframes."""
 import csv
 import datetime
 import html
 import json
+import math
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from .analysis import NOTES, PAGES
 from .engine import to_contact_frame
+from .static.fv.wireframe_geometry import project_fv
+
+
+STEP_PAGES = {"front": "Front FV", "rear": "Rear FV", "sv": "Side view", "static": "Full vehicle links"}
 
 
 def write_csv(path, rows):
@@ -26,6 +32,99 @@ def point_rows(state):
             row.update(x_prime_m=float(local[0]), y_prime_m=float(local[1]))
         rows.append(row)
     return rows
+
+
+def _step_polylines(engine, page, state, show_construction):
+    if page == "static":
+        geometry = engine.scene.geometry
+        for corner, joints in geometry["kingpins"].items():
+            axle = "rear_" if corner.startswith("R") else ""
+            for arm, joint in (("upper", "UBJ"), ("lower", "LBJ")):
+                mounts = geometry[f"{axle}{arm}_arm_mount_geometry"][corner]["mounts"]
+                for name, endpoint in mounts.items():
+                    yield f"{corner} {arm} arm {name}", (joints[joint], endpoint)
+            yield f"{corner} upright", (joints["LBJ"], joints["UBJ"])
+        return
+
+    if not state:
+        raise ValueError("目前姿態無解；請調整滑桿後再匯出。")
+    for path in state["lines"]:
+        # The contact-frame arrows do not participate in geometry fitting.
+        if not path["fit"] or (path["construction"] and not show_construction):
+            continue
+        if page == "sv":
+            points = engine.scene.geometry["side_view"].project(path["points"])
+        else:
+            points = project_fv(path["points"], engine.scene.geometry[page].longitudinal_x)
+        yield path["name"], points
+
+
+def write_step(path, engine, page, state=None, *, show_construction=True):
+    """Write the pose or static links in vehicle coordinates as an AP214 wireframe in mm."""
+    if page not in STEP_PAGES:
+        raise ValueError("STEP 匯出適用於前 FV、後 FV、SV 與靜態全車。")
+    entities = []
+
+    def entity(value):
+        entities.append(value)
+        return f"#{len(entities)}"
+
+    application = entity("APPLICATION_CONTEXT('automotive_design')")
+    entity(f"APPLICATION_PROTOCOL_DEFINITION('international standard','automotive_design',2000,{application})")
+    context = entity(f"PRODUCT_CONTEXT('',{application},'mechanical')")
+    product = entity(f"PRODUCT('Suspension Lab','{STEP_PAGES[page]}','',({context}))")
+    formation = entity(f"PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE('','',{product},.NOT_KNOWN.)")
+    definition_context = entity(f"PRODUCT_DEFINITION_CONTEXT('part definition',{application},'design')")
+    definition = entity(f"PRODUCT_DEFINITION('design','',{formation},{definition_context})")
+    shape = entity(f"PRODUCT_DEFINITION_SHAPE('','',{definition})")
+    mm = entity("(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.))")
+    angle = entity("(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.))")
+    solid_angle = entity("(NAMED_UNIT(*)SI_UNIT($,.STERADIAN.)SOLID_ANGLE_UNIT())")
+    uncertainty = entity(f"UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(0.000001),{mm},'distance_accuracy_value','')")
+    representation_context = entity(
+        f"(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT(({uncertainty}))"
+        f"GLOBAL_UNIT_ASSIGNED_CONTEXT(({mm},{angle},{solid_angle}))REPRESENTATION_CONTEXT('','3D'))")
+
+    curves, point_refs = [], {}
+    for name, points in _step_polylines(engine, page, state, show_construction):
+        vertices = []
+        for point in points:
+            xyz = tuple(float(value) * 1000 for value in point)
+            if not all(map(math.isfinite, xyz)):
+                raise ValueError(f"{name}：STEP 座標必須為有限數值。")
+            coords = ",".join(f"{round(value, 9) + 0.0:.9f}" for value in xyz)
+            if not vertices or vertices[-1] != coords:
+                vertices.append(coords)
+        if len(vertices) < 2:
+            continue
+        for coords in vertices:
+            if coords not in point_refs:
+                point_refs[coords] = entity(f"CARTESIAN_POINT('',({coords}))")
+        refs = ",".join(point_refs[coords] for coords in vertices)
+        curves.append(entity(f"POLYLINE('{name}',({refs}))"))
+    if not curves:
+        raise ValueError("目前沒有可匯出的 STEP 線框。")
+    curve_set = entity(f"GEOMETRIC_CURVE_SET('',({','.join(curves)}))")
+    representation = entity(
+        f"GEOMETRICALLY_BOUNDED_WIREFRAME_SHAPE_REPRESENTATION('',({curve_set}),{representation_context})")
+    entity(f"SHAPE_DEFINITION_REPRESENTATION({shape},{representation})")
+
+    header = ("ISO-10303-21;\nHEADER;\n"
+              "FILE_DESCRIPTION(('Suspension Lab wireframe'),'2;1');\n"
+              "FILE_NAME('suspension.step','',(''),(''),'Suspension Lab','Suspension Lab','');\n"
+              "FILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n")
+    data = "\n".join(f"#{i}={value};" for i, value in enumerate(entities, start=1))
+    content = (header + data + "\nENDSEC;\nEND-ISO-10303-21;\n").encode("ascii")
+    destination = Path(path)
+    temporary = None
+    try:
+        with NamedTemporaryFile(dir=destination.parent, prefix=".step-", delete=False) as handle:
+            temporary = Path(handle.name)
+            handle.write(content)
+        temporary.replace(destination)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def write_report(path, project, page, state, mapping, svg, controls, *, derived_parameters=None, mount_position_checks=None):

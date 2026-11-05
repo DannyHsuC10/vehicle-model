@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from .static.car import Car, SuspensionF, SuspensionR
+from .input_limits import FIELD_LIMITS, NAME_MAX_LENGTH
 
 DEFAULT_PATH = Path(__file__).with_name("default_project.json")
 
@@ -164,8 +165,9 @@ def validate(project):
         project = _upgrade_legacy(project)
     elif project["schema_version"] == 3:
         project = _upgrade_v3(project)
-    if not isinstance(project["name"], str) or not project["name"].strip():
-        raise ValueError("專案名稱不可空白。")
+    if (not isinstance(project["name"], str) or not project["name"].strip()
+            or len(project["name"]) > NAME_MAX_LENGTH):
+        raise ValueError(f"專案名稱須為 1..{NAME_MAX_LENGTH} 個字元，且不可全為空白。")
     for group, fields in FIELDS.items():
         values = project[group]
         if not isinstance(values, dict) or set(values) != set(fields):
@@ -173,6 +175,14 @@ def validate(project):
         for key, value in values.items():
             if type(value) not in (float, int) or not math.isfinite(value):
                 raise ValueError(f"{group}.{key} 必須是有限數值。")
+            # Inactive stored values are not editable inputs. In particular,
+            # a driven axle's SVSA is a result and may legitimately be large.
+            if group in ("front", "rear") and is_derived_input(project, group, key):
+                continue
+            limit = FIELD_LIMITS[group][key]
+            if not limit.accepts(value):
+                label, unit = fields[key]
+                raise ValueError(f"{group} · {label} 允許範圍：{limit.describe(unit)}。")
     v, a = project["vehicle"], project["analysis"]
     for key in ("wheelbase", "track_front", "track_rear", "mass", "gravity", "cg_height",
                 "free_radius", "tire_stiffness", "tire_width", "rim_inner_diameter"):
@@ -184,6 +194,16 @@ def validate(project):
         raise ValueError("前軸加速驅動力比例須為 0..1；0 為後驅、1 為前驅。")
     if min(v["ground_clearance"], v["rim_gap"]) < 0:
         raise ValueError("離地高與間隙不得為負。")
+    if v["ground_clearance"] > v["cg_height"]:
+        raise ValueError("車底離地高不得高於重心高度。")
+    if v["rim_inner_diameter"] >= 2*v["free_radius"]:
+        raise ValueError("輪圈內徑必須小於輪胎自由直徑（2 × 輪胎自由半徑）。")
+    if 2*v["rim_gap"] >= v["rim_inner_diameter"]:
+        raise ValueError("輪圈避讓間隙的兩倍必須小於輪圈內徑。")
+    fractions = (1-v["cg_to_front"]/v["wheelbase"], v["cg_to_front"]/v["wheelbase"])
+    if any(v["free_radius"]-v["mass"]*v["gravity"]*fraction/(2*v["tire_stiffness"]) <= 0
+           for fraction in fractions):
+        raise ValueError("輪胎負載半徑須大於 0；請檢查質量、重心位置與輪胎垂直剛性。")
     if not 0 <= v["clearance_steer_deg"] <= 80:
         raise ValueError("靜態避讓轉角須為 0..80 deg。")
     for axle in ("front", "rear"):

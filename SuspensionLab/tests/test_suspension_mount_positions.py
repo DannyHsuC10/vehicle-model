@@ -48,7 +48,9 @@ class MountPositionTests(unittest.TestCase):
         self.assertEqual(sum(map(len, from_scene(e.scene).values())), 24)
 
     def test_missing_settings_and_none_preserve_original_scene_exactly(self):
-        original = Engine(default_project())
+        missing = default_project()
+        missing.pop("arm_mount_x")
+        original = Engine(missing)
         p = default_project()
         p["arm_mount_x"] = mount_x_settings(p)
         automatic = Engine(p)
