@@ -1,4 +1,4 @@
-"""Local Tk widgets for the standalone Suspension Lab application."""
+"""Local Tk widgets for SuspensionDynamicsLab."""
 import tkinter as tk
 from tkinter import ttk
 

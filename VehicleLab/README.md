@@ -224,7 +224,7 @@ python -m vehicle_lab.cli aero --set speed_kmh=100 --output results
 
 ## 驗證
 
-2026-11-05 分裝為獨立 `VehicleLab` 資料夾，含原生介面的本工具測試 **83 項通過，0 失敗、0 錯誤、0 略過**。隔離測試僅複製本工具與隨附資料，禁止載入 SuspensionLab，並從另一個工作目錄執行全部九個工具、CSV 匯出與專案往返。九個工具的完整計算快照在分裝前後完全一致。
+2026-11-05 分裝為獨立 `VehicleLab` 資料夾，含原生介面的本工具測試 **83 項通過，0 失敗、0 錯誤、0 略過**。隔離測試僅複製本工具與隨附資料，禁止載入 SuspensionGeometryLab，並從另一個工作目錄執行全部九個工具、CSV 匯出與專案往返。九個工具的完整計算快照在分裝前後完全一致。
 
 ```powershell
 python -m unittest discover -s tests -v

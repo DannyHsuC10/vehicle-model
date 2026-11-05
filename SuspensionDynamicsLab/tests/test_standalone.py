@@ -27,7 +27,7 @@ for family,models in MODELS.items():
   p['analysis'][family].update(model=model,duration=.05,start=.01,dt=.005)
   assert simulate(p,family).time[-1]==.05
 assert 'matplotlib' not in sys.modules
-assert 'vehicle_lab' not in sys.modules and 'suspension_lab' not in sys.modules
+assert not {'vehicle_lab', 'suspension_geometry_lab', 'suspension_lab'}.intersection(sys.modules)
 app=App();app.update();app.dirty=False;app.close()
 print('All 13 models and native UI run independently')
 """

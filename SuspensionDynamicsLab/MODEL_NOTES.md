@@ -49,7 +49,7 @@ corner_*    四階單位矩陣
 
 7 DOF：簧上 `qb = [z, roll, pitch]`，質量 `[ms,Ixx,Iyy]`。
 
-8 DOF：簧上 `qb = [z, roll_f, roll_r, pitch]`，前後側傾慣量依 `lr/L`、`lf/L` 分配。扭轉能量 `½ k_twist(roll_f−roll_r)²`，阻尼同理。四輪各有獨立簧下自由度，質量及輪胎可不相同。
+8 DOF：簧上 `qb = [z, roll_f, roll_r, pitch]`，前後側傾慣量依 `lr/L`、`lf/L` 分配。扭轉能量 `½ k_twist(roll_f−roll_r)²`，阻尼同理。四輪各有獨立簧下自由度，同軸左右共用每輪簧下質量，輪胎仍為各輪獨立通道。全車簧上質量 `m_s = m − 2(mu_f + mu_r)`。1/4 的前、後輪簧上質量分別為 `m_s × lr/(2L)` 與 `m_s × lf/(2L)`。
 
 ## RC／Anti 與外力
 

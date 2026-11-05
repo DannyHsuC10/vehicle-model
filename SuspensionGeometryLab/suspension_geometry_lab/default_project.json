@@ -1,0 +1,42 @@
+{
+  "schema_version": 4,
+  "name": "StaticWireframe 基準車輛",
+  "vehicle": {
+    "wheelbase": 1.53, "cg_to_front": 0.7498400000000001,
+    "track_front": 1.25, "track_rear": 1.24, "cg_height": 0.3016451511,
+    "mass": 321.0, "gravity": 9.81, "ground_clearance": 0.05,
+    "free_radius": 0.20574, "tire_stiffness": 80185.0,
+    "tire_width": 0.1905, "rim_inner_diameter": 0.244475,
+    "rim_gap": 0.02, "clearance_steer_deg": 36.0, "brake_bias_front": 0.7,
+    "drive_force_front": 0.5
+  },
+  "front": {
+    "fvsa": 1.0, "rc_height": 0.035, "kpi_deg": 12.0, "scrub_radius": 0.025,
+    "upper_offset": 0.085, "lower_offset": 0.09,
+    "lower_mount_x": 0.21, "upper_mount_x": 0.255,
+    "caster_deg": 5.0, "mechanical_trail": 0.015,
+    "anti_dive": 0.2, "anti_lift": 0.0, "svsa": 3.4746810312241383
+  },
+  "rear": {
+    "fvsa": 1.0, "rc_height": 0.04, "kpi_deg": 13.0, "scrub_radius": 0.018,
+    "upper_offset": 0.085, "lower_offset": 0.09,
+    "lower_mount_x": 0.205, "upper_mount_x": 0.25,
+    "caster_deg": 0.0, "mechanical_trail": 0.0,
+    "anti_lift": 0.1, "anti_squat": 0.0, "svsa": 2.984219162456135
+  },
+  "analysis": {
+    "bump_mm": 25.0, "droop_mm": 25.0,
+    "steer_deg": 30.0, "caster_min_deg": -5.0, "caster_max_deg": 15.0,
+    "samples": 21
+  },
+  "arm_mount_x": {
+    "front": {
+      "upper_front_x": null, "upper_rear_x": null,
+      "lower_front_x": null, "lower_rear_x": null
+    },
+    "rear": {
+      "upper_front_x": null, "upper_rear_x": null,
+      "lower_front_x": null, "lower_rear_x": null
+    }
+  }
+}

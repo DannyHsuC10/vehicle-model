@@ -18,7 +18,7 @@ root = Path(sys.argv[1])
 sys.path.insert(0, str(root))
 class NoSiblingApp(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname.split('.')[0] in ('suspension_lab', 'new'):
+        if fullname.split('.')[0] in ('suspension_geometry_lab', 'suspension_lab', 'new'):
             raise AssertionError('External app import: ' + fullname)
 sys.meta_path.insert(0, NoSiblingApp())
 
@@ -30,6 +30,7 @@ from vehicle_lab.export import write_csv
 
 assert APP_ROOT == root
 assert not (root / 'suspension_lab').exists()
+assert not (root / 'suspension_geometry_lab').exists()
 assert Path(read_motor_curve('input_data/motor_speed_vs_torque.csv').source).is_relative_to(root)
 vehicle, geometry, settings = read_project(root / 'examples/fsae_example.json')
 for name in NAMES:
