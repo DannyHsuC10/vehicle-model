@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vehicle Initial Sizing Lab · 車輛初步設計</title>
+  <link rel="stylesheet" href="/lab.css">
+  <script defer src="/vendor/marked.js"></script>
+  <script defer src="/lab.js"></script>
+  <script defer src="/vendor/tex-svg.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand-mark" aria-hidden="true">VS</div>
+    <div>
+      <div class="app-name">Vehicle Initial Sizing Lab</div>
+      <div class="app-description">車輛初步設計工作台</div>
+    </div>
+  </header>
+  <main class="workspace">
+    <form id="parameters" class="panel inputs">
+      <div class="panel-header">
+        <div class="eyebrow">INPUTS</div>
+        <h1>車輛參數</h1>
+        <p>依各欄位單位輸入，進階設定按主題展開。</p>
+      </div>
+      <div class="input-actions">
+        <button id="solve" type="submit" class="primary" disabled>求解 <kbd>Ctrl+Enter</kbd></button>
+        <button id="reset" type="reset" disabled>恢復預設</button>
+      </div>
+      <div id="input-error" role="alert" hidden></div>
+      <div class="parameter-scroll">
+        <fieldset id="fields" aria-label="參數欄位"></fieldset>
+      </div>
+    </form>
+    <section class="panel results" aria-labelledby="result-title">
+      <div class="panel-header result-header">
+        <div>
+          <div class="eyebrow">REPORT</div>
+          <h2 id="result-title">求解報告</h2>
+          <p id="status" role="status">正在載入預設參數…</p>
+        </div>
+        <div class="report-actions">
+          <select id="chapter" aria-label="跳至報告章節" disabled>
+            <option value="">跳至章節</option>
+          </select>
+          <button id="download" type="button" disabled>下載 Markdown</button>
+        </div>
+      </div>
+      <div id="report-scroll" class="report-scroll">
+        <div id="placeholder" class="placeholder">
+          <div class="placeholder-mark" aria-hidden="true">∑</div>
+          <h3>準備好求解</h3>
+          <p>在左側調整車輛參數，或用預設值直接試算。<br>結果會在這裡顯示，包含表格、公式與數值代入。</p>
+        </div>
+        <dl id="summary" class="summary" aria-label="重點結果" hidden></dl>
+        <article id="report" class="report"></article>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
