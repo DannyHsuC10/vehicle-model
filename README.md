@@ -13,7 +13,7 @@
 
 SuspensionGeometryLab、VehicleLab 和 SuspensionDynamicsLab 各有 `tests/` 與 `Start-Tests.bat`。雙擊該工具內的 `Start-Tests.bat` 會執行完整測試（含原生視窗），也可在該工具資料夾執行 `python -m unittest discover -s tests -v`。
 
-各套工具皆需要 Python 3.10+。VehicleInitialSizingLab 使用本機瀏覽器，其餘三套使用 Tkinter。SuspensionGeometryLab 與 SuspensionDynamicsLab 另需要 NumPy，PNG 匯出需要 Pillow。
+各套工具皆需要 Python 3.10+ 與 Tkinter。VehicleInitialSizingLab 另以 WebView2 顯示 Markdown 和 LaTeX。SuspensionGeometryLab 與 SuspensionDynamicsLab 另需要 NumPy，PNG 匯出需要 Pillow。
 
 既有車輛專案位於 `VehicleLab/projects/vehicle_project.json`；懸吊專案可存入 `SuspensionGeometryLab/projects/`。兩套工具的 JSON 格式不同，請各自開啟對應的專案。
 

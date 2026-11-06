@@ -7,7 +7,7 @@ import numpy as np
 
 from suspension_dynamics.charts import MotionView, WHEEL_RADIUS, WHEEL_WIDTH, WHEEL_ITEMS
 from suspension_dynamics.engine import Result
-from suspension_dynamics.project import default_project
+from suspension_dynamics.project import default_project, parameters_for_analysis
 
 
 def recording(family):
@@ -16,8 +16,10 @@ def recording(family):
     for label in labels:
         for kind in ('Body','Wheel','Road'):
             signals[f'{kind} {label}']=np.array([0.,10. if kind=='Body' else 0.])
+    project = default_project()
+    project['parameters'][family] = parameters_for_analysis(project, family)
     return Result(family,'preview',np.array([0.,.1]),signals,{name:'mm' for name in signals},
-                  {'位移':list(signals)},default_project(),{'model_label':'Geometry verification'})
+                  {'位移':list(signals)},project,{'model_label':'Geometry verification'})
 
 
 class MotionGeometryTests(unittest.TestCase):

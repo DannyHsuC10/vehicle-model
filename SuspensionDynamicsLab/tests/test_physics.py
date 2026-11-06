@@ -88,7 +88,7 @@ class DynamicsTests(unittest.TestCase):
         self.assertTrue(all(row[2:5] == (None, None, None) for row in statistics(sine)))
 
     def test_iso_road_class_psd_and_speed_to_distance_mapping(self):
-        system = assemble('quarter', 'quarter', self.p['parameters']['quarter'])
+        system = assemble('quarter', 'quarter', parameters_for_analysis(self.p, 'quarter'))
         options = dict(self.p['analysis']['quarter'], scenario='iso_a', speed=10., start=.1, seed=32)
         slow = Road(system, options)
         fast = Road(system, dict(options, speed=20.))
@@ -130,7 +130,7 @@ class DynamicsTests(unittest.TestCase):
         for family,models in MODELS.items():
             for model in models:
                 if model=='rollcenter_all':continue
-                s=assemble(family,model,self.p['parameters'][family])
+                s=assemble(family,model,parameters_for_analysis(self.p, family))
                 np.testing.assert_allclose(s.K,s.K.T,atol=1e-10)
                 np.testing.assert_allclose(s.C,s.C.T,atol=1e-10)
                 self.assertGreater(np.min(np.linalg.eigvalsh(s.K)),-1e-7)
@@ -247,7 +247,7 @@ class DynamicsTests(unittest.TestCase):
         self.assertLess(errors[2],errors[1]/8)
 
     def test_rear_road_delay_uses_wheelbase_over_speed(self):
-        p=self.p['parameters']['FR'];opt=self.p['analysis']['FR'];opt.update(target='all',start=.1,rear_delay=True)
+        p=parameters_for_analysis(self.p, 'FR');opt=self.p['analysis']['FR'];opt.update(target='all',start=.1,rear_delay=True)
         road=Road(assemble('FR','half',p),opt)
         delay=(p['lf']+p['lr'])/opt['speed']
         self.assertAlmostEqual(road.at(.2)[0][0],.01)
@@ -255,14 +255,14 @@ class DynamicsTests(unittest.TestCase):
         self.assertAlmostEqual(road.at(.2+delay)[0][1],.01)
 
     def test_independent_right_road_velocity_is_used(self):
-        p=self.p['parameters']['LR'];o=self.p['analysis']['LR'];o.update(scenario='sine',target='right')
+        p=parameters_for_analysis(self.p, 'LR');o=self.p['analysis']['LR'];o.update(scenario='sine',target='right')
         s=assemble('LR','half',p);road=Road(s,o);zr,vr,*_=road.at(.6)
         f=s.forces(.6,road)
         self.assertEqual(zr[0],0);self.assertEqual(vr[0],0)
         self.assertAlmostEqual(f[s.body_dof+1],p['kt']*zr[1]+p['ct']*vr[1])
 
     def test_front_rear_modal_and_direct_push_motion_ratios_are_independent(self):
-        p=self.p['parameters']['FR'];p.update(mr_front=2.,mr_rear=3.,mr_corner=.5,k_front=10000.,k_rear=12000.,c_front=300.,c_rear=400.)
+        p=parameters_for_analysis(self.p, 'FR');p.update(mr_front=2.,mr_rear=3.,mr_corner=.5,k_front=10000.,k_rear=12000.,c_front=300.,c_rear=400.)
         s=assemble('FR','half',p)
         self.assertAlmostEqual(s.ks[0,0],p['k_heave_f']*4+10000*.25)
         self.assertAlmostEqual(s.ks[1,1],p['k_heave_r']*9+12000*.25)

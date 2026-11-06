@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from .engine import Result, steady_response
-from .project import default_project, validate, upgrade_project
+from .project import default_project, parameters_for_analysis, validate, upgrade_project
 
 
 def fingerprint(result):
@@ -143,6 +143,7 @@ def import_legacy(path):
     if family not in ("quarter","LR","FR","full"):
         family = "full" if "theta" in data else "LR" if "left_zs" in data else "FR" if "front_zs" in data else "quarter"
     project = default_project()
+    project["parameters"][family] = parameters_for_analysis(project, family)
     signals, units, groups = {}, {}, {}
     def add(name, values, unit, group):
         signals[name] = np.asarray(values,dtype=float)

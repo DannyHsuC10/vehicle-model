@@ -4,64 +4,17 @@
   "name": "懸吊彈簧阻尼分析",
   "parameters": {
     "quarter": {
-      "ms": 67.0,
-      "mu": 13.0,
-      "kt": 80000.0,
-      "ct": 50.0,
       "zeta": 0.7,
       "ks": 28000.0,
       "cs": 844.6537752239079,
       "mr": 1.0
     },
     "LR": {
-      "ms": 65.0,
-      "mu": 14.0,
-      "kt": 800000.0,
-      "ct": 50.0,
-      "zeta": 0.7,
-      "track": 1.28,
-      "Ix": 30.0,
-      "h_cg": 0.3,
-      "h_rc": 0.025,
-      "k_heave": 100000.0,
-      "k_roll": 100000.0,
-      "k_left": 0.0,
-      "k_right": 0.0,
-      "c_heave": 3569.3136595149494,
-      "c_roll": 2679.129406169101,
-      "c_left": 0.0,
-      "c_right": 0.0,
-      "mr_heave": 1.0,
-      "mr_roll": 1.0,
-      "mr_corner": 1.0,
       "k_frame": 1000000.0,
       "c_frame": 150.0,
       "m_frame": 65.0
     },
-    "FR": {
-      "ms": 65.0,
-      "mu": 15.0,
-      "kt": 80000.0,
-      "ct": 50.0,
-      "zeta": 0.7,
-      "lf": 0.765,
-      "lr": 0.765,
-      "Iy": 50.0,
-      "h_cg": 0.3,
-      "anti_dive_front": 0.2,
-      "anti_squat_rear": 0.2,
-      "k_heave_f": 70000.0,
-      "k_heave_r": 70000.0,
-      "k_front": 0.0,
-      "k_rear": 0.0,
-      "c_heave_f": 2659.573063193291,
-      "c_heave_r": 2659.573063193291,
-      "c_front": 0.0,
-      "c_rear": 0.0,
-      "mr_front": 1.0,
-      "mr_rear": 1.0,
-      "mr_corner": 1.0
-    },
+    "FR": {},
     "full": {
       "m": 321.0,
       "lf": 0.765,
@@ -144,7 +97,8 @@
       "ramp": 0.15,
       "seed": 0,
       "random_interval": 0.02,
-      "rear_delay": false
+      "rear_delay": false,
+      "parameter_corner": "FL"
     },
     "LR": {
       "model": "half",
@@ -162,7 +116,8 @@
       "ramp": 0.15,
       "seed": 0,
       "random_interval": 0.02,
-      "rear_delay": false
+      "rear_delay": false,
+      "parameter_axle": "front"
     },
     "FR": {
       "model": "half",
@@ -180,7 +135,8 @@
       "ramp": 0.15,
       "seed": 0,
       "random_interval": 0.02,
-      "rear_delay": true
+      "rear_delay": true,
+      "parameter_axle": "front"
     },
     "full": {
       "model": "flex",

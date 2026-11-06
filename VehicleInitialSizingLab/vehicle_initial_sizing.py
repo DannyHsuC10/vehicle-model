@@ -74,6 +74,7 @@ Anti 僅用純 Heave 主簧，依指定規則設定：
     anti_scrub = a_r * a_acc / ax
     rear_anti_lift = front_anti_dive
     front_anti_lift = anti_scrub
+    rear_anti_squat = front_anti_lift
 煞車方向的純主簧 Pitch 使用設定後的前 Anti-dive 與後 Anti-lift：
     G_pitch_anti = (1 - front_anti_dive) * G_susp_front + (1 - rear_anti_lift) * G_susp_rear + G_tire
 此為剛性類比設定值；幾何硬點與實際煞車力路徑未在此模型中求解。
@@ -177,75 +178,8 @@ Brake_ratio 使用無空力直線煞車，brake_ax 為正的減速度 g 倍數�
 
 import math
 
+from project import FIELDS, default_project, validate_inputs
 
-# 可直接修改以下參數；初值參考目前專案設定與 COG 計算結果。
-# 本腳本只使用這裡的數值，不自動讀取 CSV 或執行其他分析。
-
-# 懸吊配置
-use_tender = True              # 是否使用 Tender；False：跳過 Heave 反算，直接使用原 Heave 主簧剛性
-
-# 初始layout 設定
-ms = 260.55                    # 全車簧上質量，kg 
-mu = 14.4                      # 單輪簧下質量，kg（四輪平均）
-h_cog = 0.3                    # 重心離地高度，m
-lf = 0.765                     # 重心到前軸的縱向距離，m
-lr = 0.765                     # 重心到後軸的縱向距離，m
-
-# 性能目標
-ax = 2.0                       # 縱向加速度，g；AntiScrub 的基準須為正
-ay = 2.2                       # 側向加速度，g；正值右輪增載，剛性需求取絕對值
-a_acc = 1.2                    # Gear_rate 加速目標，g；亦用於 AntiScrub = 後軸剛性比例 * a_acc / ax
-# AntiScrub 的分母 ax 必須為正；a_acc 與 ax 同用 g，不另設 a_cc 參數。
-target_lap_time_s = 5.0         # Skidpad 目標單圈時間，s（4.0～6.0）
-drive_target_speed_kmh = 110.0  # 目標極速，km/h
-
-# 規則與統計資料尺寸
-sus_travel = 0.025             # 目標懸吊壓縮行程，m 大於 0 規則設定行程須滿足（25 mm）
-tf = 1.250                     # 前輪距，m（1250 mm）統計資料
-tr = 1.240                     # 後輪距，m（1240 mm）統計資料
-
-# 空力參數
-A_air = 1.0                    # 空力有效面積，m^2
-air_density_kg_per_m3 = 1.225   # 空氣密度，kg/m^3；沿用 analysis/Aero_Cl_Cd.py
-
-# 依照RCVD建議 之後再調整
-kf = 0.55                      # 前軸剛性比例，kf:kr = 55:45
-kr = 0.45                      # 後軸剛性比例
-
-target_pitch_angle_deg = 1.5    # 允許俯仰角，deg（0.1～3.0）
-target_roll_angle_deg = 2.0     # 允許側傾角，deg（0.1～3.0）
-
-# Camber 歸零反解；由最小轉彎半徑求需求轉角，沿用已確認的正方向與固定座標負號。
-kpi_deg = 8.0                  # 主銷內傾角，deg
-min_turn_radius_m = 3.0        # 最小轉彎半徑，m；依 R = L/tan(theta) 計算單軌等效前輪轉角
-caster_direction_check_deg = 10.0  # 僅用於印出 ±轉向角的方向驗證，不參與求解或修改轉向設定
-
-MR = 1.0                       # 運動比；輪率 Kw = Ks * MR**2
-sprung_roll_inertia_kg_m2 = 7.917820044730256  # 簧上 CG 的 Ixx；初值取 data/results/cog_movable/result.csv
-# 臨界阻尼的彈簧與阻尼器均沿用 MR；上述慣量為手動初值，不自動重新讀取 COG 結果。
-
-# 輪胎資料
-Kt = 80000.0                   # 單輪輪胎垂直剛性，N/m
-wl_mu_y = 1.81526957993174      # 橫向輪胎摩擦係數，初值沿用現有摩擦係數分析結果
-mu_w = 1.6046564575663345       # 縱向輪胎摩擦係數；初值取目前 coefficient_of_friction 結果
-R_tire = 0.2                   # 輪胎有效滾動半徑，m
-
-# 傳動參數；轉速與車速初值沿用目前儲存設定，扭矩初值取既有馬達曲線峰值。
-drive_motor_torque_Nm = 22.30565254  # 單顆馬達最大扭矩，Nm；本腳本手動設定、不自動讀取曲線
-drive_motor_rpm = 15000.0       # 馬達最高轉速，rpm
-
-# 經驗參數
-N = 5.0                        # 與 Frequency vs mass 相同：目標簧上頻率 = 目前簧下頻率 / N
-rc_chassis_stiffness_ratio = 10.0  # Kc / Ks，僅用於前 Roll Center 的正規化模型
-# Anti 的車體軸端垂向等效剛性（N/m），前後可獨立修改。
-# 初始估值沿用改版前主 Heave 72829.63107381333 N/m、MR=1 的 10 倍假設，非實測值。
-# 這兩個值固定；修改彈簧、MR 或 Tender 狀態時不自動縮放，也不是車架扭轉剛性 N·m/deg。
-anti_front_chassis_stiffness_N_per_m = 728296.3107381333
-anti_rear_chassis_stiffness_N_per_m = 728296.3107381333
-F_ref_ratio = 1.0              # Tender 與輪載使用所需下壓力的比例（0～1；1 為全部）
-wl_aero_front_ratio = 0.5      # 輪載計算的空力前軸分配比例（0～1）；後軸為 1 減此值
-cg_safety_factor = 1.0         # CG 傾斜幾何安全係數，至少為 1，沿用目前專案設定
-brake_driver_force_N = 500.0    # 車手施加於煞車踏板的腳力，N
 
 g = 9.81                       # 重力加速度，m/s^2
 
@@ -679,7 +613,7 @@ def calculate_axle_anti(front_suspension_stiffness, rear_suspension_stiffness,
 def calculate_anti_assignments(front_suspension_stiffness, rear_suspension_stiffness,
                                front_chassis_stiffness, rear_chassis_stiffness,
                                acceleration_g, reference_acceleration_g):
-    """以各軸剛性基準依指定關係設定前 Anti-dive、AntiScrub 與前後 Anti-lift。"""
+    """以各軸剛性基準依指定關係設定煞車與加速的 Anti 比例。"""
     if not math.isfinite(acceleration_g) or acceleration_g < 0:
         raise ValueError("acceleration_g（a_acc）必須為非負的有限值（g）")
     if not math.isfinite(reference_acceleration_g) or reference_acceleration_g <= 0:
@@ -693,7 +627,8 @@ def calculate_anti_assignments(front_suspension_stiffness, rear_suspension_stiff
     scrub = result["rear"]["anti_ratio"] * acceleration_ratio
     result["acceleration_ratio"] = acceleration_ratio
     for name, ratio in (("front_anti_dive", front_dive), ("anti_scrub", scrub),
-                        ("rear_anti_lift", front_dive), ("front_anti_lift", scrub)):
+                        ("rear_anti_lift", front_dive), ("front_anti_lift", scrub),
+                        ("rear_anti_squat", scrub)):
         percent = ratio * 100
         if not math.isfinite(ratio) or not math.isfinite(percent):
             raise ValueError(f"{name} 換算後必須為有限值")
@@ -1221,19 +1156,26 @@ def calculate_cg_safety(cog_height, front_track, rear_track, safety_factor):
     return result
 
 
-def solve(
-    *, use_tender=use_tender, ms=ms, mu=mu, h_cog=h_cog, lf=lf, lr=lr, ax=ax, ay=ay, a_acc=a_acc,
-    brake_ax=None, target_lap_time_s=target_lap_time_s, drive_target_speed_kmh=drive_target_speed_kmh,
-    sus_travel=sus_travel, tf=tf, tr=tr, A_air=A_air, air_density_kg_per_m3=air_density_kg_per_m3,
-    kf=kf, kr=kr, target_pitch_angle_deg=target_pitch_angle_deg, target_roll_angle_deg=target_roll_angle_deg,
-    kpi_deg=kpi_deg, min_turn_radius_m=min_turn_radius_m, caster_direction_check_deg=caster_direction_check_deg,
-    MR=MR, sprung_roll_inertia_kg_m2=sprung_roll_inertia_kg_m2, Kt=Kt, wl_mu_y=wl_mu_y, mu_w=mu_w,
-    R_tire=R_tire, drive_motor_torque_Nm=drive_motor_torque_Nm, drive_motor_rpm=drive_motor_rpm, N=N,
-    rc_chassis_stiffness_ratio=rc_chassis_stiffness_ratio,
-    anti_front_chassis_stiffness_N_per_m=anti_front_chassis_stiffness_N_per_m,
-    anti_rear_chassis_stiffness_N_per_m=anti_rear_chassis_stiffness_N_per_m,
-    F_ref_ratio=F_ref_ratio, wl_aero_front_ratio=wl_aero_front_ratio, cg_safety_factor=cg_safety_factor,
-    brake_driver_force_N=brake_driver_force_N, emit=lambda message: None,
+def solve(*, emit=lambda message: None, **overrides):
+    """Solve using project defaults for inputs omitted by the caller."""
+    validate_inputs(overrides)
+    values = overrides if overrides.keys() == FIELDS.keys() else default_project() | overrides
+    return _solve(**values, emit=emit)
+
+
+def _solve(
+    *, use_tender, ms, mu, h_cog, lf, lr, ax, ay, a_acc,
+    brake_ax, target_lap_time_s, drive_target_speed_kmh,
+    sus_travel, tf, tr, A_air, air_density_kg_per_m3,
+    kf, kr, target_pitch_angle_deg, target_roll_angle_deg,
+    kpi_deg, min_turn_radius_m, caster_direction_check_deg,
+    MR, sprung_roll_inertia_kg_m2, Kt, wl_mu_y, mu_w,
+    R_tire, drive_motor_torque_Nm, drive_motor_rpm, N,
+    rc_chassis_stiffness_ratio,
+    anti_front_chassis_stiffness_N_per_m,
+    anti_rear_chassis_stiffness_N_per_m,
+    F_ref_ratio, wl_aero_front_ratio, cg_safety_factor,
+    brake_driver_force_N, emit=lambda message: None,
 ):
     """Solve one independent input set and return the full report snapshot."""
     brake_ax = ax if brake_ax is None else brake_ax
@@ -1412,6 +1354,7 @@ def solve(
           f"= {settings['anti_scrub_percent']:.6f}%")
     emit(f"後 Anti-lift = 前 Anti-dive = {settings['rear_anti_lift_percent']:.6f}%")
     emit(f"前 Anti-lift = AntiScrub = {settings['front_anti_lift_percent']:.6f}%")
+    emit(f"後 Anti-squat = 前 Anti-lift = {settings['rear_anti_squat_percent']:.6f}%")
 
     rc_result = calculate_roll_center(h_cog, rc_chassis_stiffness_ratio)
     emit("\nroll_center：正規化等效剛性與 Roll Center 高度：")

@@ -1,18 +1,24 @@
 @echo off
 cd /d "%~dp0"
-if exist "%~dp0.venv\Scripts\python.exe" (
-  "%~dp0.venv\Scripts\python.exe" run.py %*
-  goto done
+if not exist "build\webview2\ReportHost.exe" (
+  powershell.exe -NoProfile -File "%~dp0Build-WebView2Host.ps1"
+  if errorlevel 1 goto setup
 )
-if exist "%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" (
-  "%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" run.py %*
-  goto done
+if exist "%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\pythonw.exe" (
+  start "" "%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\pythonw.exe" "%~dp0run.py"
+  exit /b
 )
-py -3 --version >nul 2>&1
+py -3 -c "import tkinter" >nul 2>&1
 if not errorlevel 1 (
-  py -3 run.py %*
-  goto done
+  start "" pyw -3 "%~dp0run.py"
+  exit /b
 )
-python run.py %*
-:done
+python run.py
 if errorlevel 1 pause
+exit /b
+
+:setup
+echo Build-WebView2Host.ps1 requires the Microsoft WebView2 SDK.
+echo See README.md for build instructions.
+pause
+exit /b 1

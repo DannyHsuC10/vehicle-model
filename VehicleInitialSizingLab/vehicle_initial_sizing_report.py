@@ -1,6 +1,8 @@
 """Render the calculation run supplied by vehicle_initial_sizing, using only the standard library."""
 
+import csv
 from datetime import datetime, timedelta, timezone
+from io import StringIO
 import math
 import re
 
@@ -40,6 +42,18 @@ def _flatten(value, prefix=""):
         yield prefix, value
 
 
+def render_csv_results(snapshot):
+    output = StringIO(newline="")
+    writer = csv.writer(output, lineterminator="\r\n")
+    writer.writerow(("section", "field", "value"))
+    for section, values in snapshot.items():
+        if isinstance(values, (dict, list, tuple)):
+            writer.writerows((section, field, value) for field, value in _flatten(values))
+        else:
+            writer.writerow((section, section, values))
+    return output.getvalue()
+
+
 class MarkdownReport:
     def __init__(self):
         self.parts = []
@@ -74,14 +88,14 @@ graph TD
     T -->|"是"| F["Heave 反算與 Tender 可行性"]
     T -->|"否"| HF["直接使用原 Heave 主簧剛性"]
     HF --> G
-    F --> G["前後剛性基準 → AntiScrub、前後 Anti-lift；前後 RC"]
+    F --> G["前後剛性基準 → 煞車與加速 Anti；前後 RC"]
     G --> H["FVSA、輪胎 Roll、半徑求轉角與 Caster"]
     H --> I["空力載重與四輪受力；Tender 啟用時另算串聯壓縮"]
     I --> J["齒比、煞車與機械利益"]
     J --> K["前後阻尼、四組 Ks→Kw→Kr"]
     K --> L["Roll／Pitch gradient"]
     L --> M["本次結果與 LaTeX 數值代入"]
-    M --> N["預覽或下載 Markdown 報告"]
+    M --> N["預覽或儲存 Markdown 報告"]
 ```"""
 
 
@@ -107,7 +121,7 @@ def render_markdown_report(snapshot):
         r.heading(group, 3)
         r.table(["結果欄位", "本次數值／狀態"], _flatten(values))
     r.heading("21. 更新方式")
-    r.text("在 Vehicle Initial Sizing Lab 調整左側參數並按「求解」。按「下載 Markdown」可保存當次完整報告。")
+    r.text("在 Vehicle Initial Sizing Lab 調整左側參數並按「求解」。按「儲存 Markdown」可保存當次完整報告。")
     return "".join(r.parts)
 
 
@@ -307,7 +321,7 @@ def _render_basics(r, s):
              ratio=tender["tender_to_heave_stiffness_ratio"], series=tender["K_heave_with_tender_N_per_m"])
         r.text("串聯剛性僅適用於 Tender 未併圈階段。")
 
-    r.heading("9.3 前 Anti-dive 與 9.4 AntiScrub／前後 Anti-lift")
+    r.heading("9.3 前 Anti-dive 與 9.4 加速／煞車 Anti 設定")
     r.text("前後軸分別使用軸端垂向懸吊剛性 Kz 與車體等效剛性 Kc，單位均為 N/m。"
            "Kc 為可獨立修改的固定輸入；初始值由改版前主 Heave 72829.63107381333 N/m、MR = 1 的 10 倍假設估算，非量測值。"
            "目前前後使用相同 Heave 彈簧；Roll 的 kf／kr 不套用於此處。")
@@ -332,7 +346,7 @@ def _render_basics(r, s):
              r"K_{\mathrm{eq},i,\min}=\frac{@kz@\cdot@kc@}{@kz@+@kc@}=@eq@\ \mathrm{N/m}",
              kz=x["suspension_stiffness_N_per_m"], kc=x["chassis_stiffness_N_per_m"],
              eq=x["equivalent_stiffness_N_per_m"])
-    r.heading("AntiScrub 與前後 Anti-lift 的設定", 3)
+    r.heading("AntiScrub、前後 Anti-lift 與後 Anti-squat", 3)
     r.eq(r"\mathrm{AntiDive}_f=a_f",
          r"\mathrm{AntiDive}_f=@a@=@percent@\%",
          a=values["front_anti_dive_ratio"], percent=values["front_anti_dive_percent"])
@@ -345,15 +359,21 @@ def _render_basics(r, s):
          r"\mathrm{AntiLift}_f=@front@=@front_percent@\%",
          rear=values["rear_anti_lift_ratio"], rear_percent=values["rear_anti_lift_percent"],
          front=values["front_anti_lift_ratio"], front_percent=values["front_anti_lift_percent"])
+    r.eq(r"\mathrm{AntiSquat}_r=\mathrm{AntiLift}_f",
+         r"\mathrm{AntiSquat}_r=@ratio@=@percent@\%",
+         ratio=values["rear_anti_squat_ratio"], percent=values["rear_anti_squat_percent"])
     r.table(["設定項目", "比例", "百分比", "來源"], (
         ("前 Anti-dive", values["front_anti_dive_ratio"], values["front_anti_dive_percent"], "前軸剛性基準"),
         ("AntiScrub", values["anti_scrub_ratio"], values["anti_scrub_percent"], "後軸剛性基準 × a_acc / ax"),
         ("後 Anti-lift", values["rear_anti_lift_ratio"], values["rear_anti_lift_percent"], "等於前 Anti-dive"),
         ("前 Anti-lift", values["front_anti_lift_ratio"], values["front_anti_lift_percent"], "等於 AntiScrub"),
+        ("後 Anti-squat", values["rear_anti_squat_ratio"], values["rear_anti_squat_percent"], "等於前 Anti-lift"),
     ))
     r.text("Anti 目前只使用純 Heave 主簧；後軸剛性基準經 a_acc／ax 換算為 AntiScrub，"
            "後 Anti-lift 則依指定關係取前 Anti-dive。程式參數 a_acc 對應加速目標，與 ax 均以 g 輸入。"
            "此為兩路剛性類比及指定比例設定；幾何硬點與實際煞車力路徑不在此求解。")
+    r.text("加速工況將後 Anti-squat 設為前 Anti-lift。以 Dynamics 的全車力公式套用相同係數時，"
+           "前後驅動力各占 50% 才會得到相同大小的前後 Anti 力矩貢獻。")
 
     r.heading("10. 前 Roll Center 與 11. 後 Roll Center")
     rc = s["front_rc"]

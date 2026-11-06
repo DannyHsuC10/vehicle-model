@@ -18,6 +18,7 @@ COMMON = {
     "zeta": field("自動估算用阻尼比 ζ", "1"),
 }
 LINKED_LOCAL_FIELDS = {"quarter": ("zeta", "ks", "cs", "mr"), "LR": ("k_frame", "c_frame", "m_frame"), "FR": ()}
+SIZING_METADATA = ("tender_enabled", "tender_stiffness_N_per_m", "heave_configuration")
 PARAMETER_SOURCES = {
     "quarter": ("parameter_corner", {corner: TARGETS[corner] for corner in CORNERS}),
     "LR": ("parameter_axle", {"front": "前軸參數"}),
@@ -177,9 +178,13 @@ def parameters_for_analysis(project, family):
     return p
 
 
-def validate_parameters(family, parameters):
+def validate_parameters(family, parameters, *, linked=False):
     fields = FIELDS[family]
     if isinstance(parameters, dict):
+        if linked and family in LINKED_LOCAL_FIELDS and parameters.keys() == set(LINKED_LOCAL_FIELDS[family]):
+            fields = {key: fields[key] for key in LINKED_LOCAL_FIELDS[family]}
+        if family in ("LR", "FR") and "zeta" not in parameters:
+            fields = {key: value for key, value in fields.items() if key != "zeta"}
         if family == "LR":
             for extra_fields in (LR_WHEEL_FIELDS, LEGACY_LR_MASS_FIELDS):
                 if extra_fields.keys() & parameters.keys():
@@ -213,8 +218,10 @@ def validate(project):
     ):
         raise ValueError("阻尼自動估算設定無效。")
     for family in FAMILIES:
-        validate_parameters(family, project.get("parameters", {}).get(family))
-        validate_options(family, project.get("analysis", {}).get(family, {}))
+        options = validate_options(family, project.get("analysis", {}).get(family, {}))
+        source = PARAMETER_SOURCES.get(family)
+        validate_parameters(family, project.get("parameters", {}).get(family),
+                            linked=source is not None and source[0] in options)
     return project
 
 
@@ -251,21 +258,69 @@ def validate_options(family, opt):
 
 
 def load_project(path):
-    project = validate(upgrade_project(json.loads(Path(path).read_text(encoding="utf-8-sig"))))
-    return link_full_parameters(project)
+    project = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    if (not isinstance(project, dict) or project.get("schema_version") != 1
+            or project.get("application") not in ("SuspensionDynamicsLab", "VehicleInitialSizingLab-DynamicsExport")):
+        raise ValueError("請開啟 SuspensionDynamicsLab 專案或 Initial Sizing 的全車參數 JSON。")
+    defaults = default_project()
+    groups = project.get("parameters")
+    project["analysis"] = defaults["analysis"]
+    if isinstance(groups, dict) and groups.keys() == {"full"} and isinstance(groups["full"], dict):
+        project["application"] = "SuspensionDynamicsLab"
+        full = groups["full"]
+        metadata = {key: full.pop(key) for key in SIZING_METADATA if key in full}
+        if metadata:
+            project["initial_sizing"] = metadata
+        quarter = defaults["parameters"]["quarter"]
+        quarter["zeta"] = full.pop("zeta", quarter["zeta"])
+        frame = {key: full.pop(key, value) for key, value in defaults["parameters"]["LR"].items()}
+        groups.update(quarter=quarter, LR=frame, FR={})
+        validate(project)
+        groups["quarter"] = estimate_quarter_from_full(project, metadata)
+    return link_full_parameters(validate(upgrade_project(project)))
+
+
+def estimate_quarter_from_full(project, metadata):
+    full = project["parameters"]["full"]
+    tender = metadata.get("tender_stiffness_N_per_m")
+    enabled = metadata.get("tender_enabled", tender is not None)
+    if not isinstance(enabled, bool):
+        raise ValueError("Tender 啟用狀態須為布林值。")
+    if tender is not None and (type(tender) not in (int, float) or not math.isfinite(tender) or tender <= 0):
+        raise ValueError("Tender 剛性須為正的有限數值，或留空。")
+    # Recover the front main-spring rate from the axle-sum heave channel.
+    heave = 4 * full["heave_f_k"]
+    if enabled and tender is not None and heave > 0:
+        heave = 1 / (1 / heave + 1 / tender)
+    quarter = parameters_for_analysis(project, "quarter")
+    quarter.update(ks=(heave + full["roll_f_k"]) / 4, mr=full["corner_FL_mr"])
+    validate_parameters("quarter", quarter)
+    quarter = estimate_damping("quarter", quarter)
+    return {key: quarter[key] for key in LINKED_LOCAL_FIELDS["quarter"]}
 
 
 def upgrade_project(project):
     # Early v1 previews shared the heave MR with direct-push channels.
     if isinstance(project,dict) and project.get('application')=='SuspensionDynamicsLab' and project.get('schema_version')==1:
         fr=project.get('parameters',{}).get('FR')
-        if isinstance(fr,dict):fr.setdefault('mr_corner',1.)
+        if isinstance(fr,dict) and fr:fr.setdefault('mr_corner',1.)
     return project
 
 
 def save_project(path, project):
     validate(project)
-    Path(path).write_text(json.dumps(project, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    groups = project["parameters"]
+    full = {**groups["full"], "zeta": groups["quarter"]["zeta"]}
+    full.update({key: groups["LR"][key] for key in LINKED_LOCAL_FIELDS["LR"]})
+    metadata = project.get("initial_sizing", {})
+    tender = metadata.get("tender", {})
+    if tender:
+        full.update(tender_enabled=tender.get("enabled"), tender_stiffness_N_per_m=tender.get("stiffness_N_per_m"))
+    full.update({key: metadata[key] for key in SIZING_METADATA if key in metadata})
+    compact = {key: value for key, value in project.items()
+               if key not in ("analysis", "parameters", "initial_sizing")}
+    compact["parameters"] = {"full": full}
+    Path(path).write_text(json.dumps(compact, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
 
 
 def estimate_damping(family, values):

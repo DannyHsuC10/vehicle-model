@@ -53,9 +53,6 @@ class ParameterEditor(tk.Toplevel):
             self.notebook.add(scroll,text=FAMILIES[family])
             frame=scroll.content
             toolbar=ttk.Frame(frame,padding=10);toolbar.pack(fill="x")
-            if family != "FR":
-                label = "重設車架參數" if family == "LR" else "重設本類參數"
-                ttk.Button(toolbar,text=label,command=lambda f=family:self.reset_family(f)).pack(side="left")
             if family in ("LR", "FR"):
                 _, choices = PARAMETER_SOURCES[family]
                 axle = choices[self.sources.get(family, "front")]
@@ -140,7 +137,7 @@ class ParameterEditor(tk.Toplevel):
             try:values[key]=old if text==f"{old:.12g}" else float(text)
             except ValueError as exc:raise ValueError(f"{FIELDS[family][key][0]} 需要數值。") from exc
         if automatic:
-            validate_parameters(family, values)
+            validate_parameters(family, values, linked=True)
             try:
                 draft = self.linked_draft()
                 draft["parameters"][family] = values
@@ -148,15 +145,8 @@ class ParameterEditor(tk.Toplevel):
                 values["cs"] = parameters_for_analysis(draft, family)["cs"]
             except (OverflowError, ZeroDivisionError) as exc:
                 raise ValueError(f"{FAMILIES[family]} 無法估算阻尼係數，請檢查輸入範圍。") from exc
-            validate_parameters(family, values)
+            validate_parameters(family, values, linked=True)
         return values
-
-    def reset_family(self,family):
-        automatic = family in self.auto_damping and self.auto_damping[family].get()
-        defaults = default_project()["parameters"][family]
-        for key in LINKED_LOCAL_FIELDS.get(family, defaults):
-            if not automatic or key not in ESTIMATED_DAMPING[family]:
-                self.entries[family, key].set(f"{defaults[key]:.12g}")
 
     def linked_draft(self):
         full = self.values("full")
@@ -665,8 +655,6 @@ class App(tk.Tk):
         except Exception as exc:messagebox.showerror("開啟失敗",str(exc),parent=self)
 
     def save(self,as_new=False):
-        try:self.sync_inputs()
-        except ValueError as exc:messagebox.showerror("輸入錯誤",str(exc),parent=self);return
         path=self.project_path
         if as_new or path is None:
             path=filedialog.asksaveasfilename(parent=self,title="儲存專案",initialdir=ROOT/"projects",defaultextension=".json",filetypes=[("專案 JSON","*.json")])

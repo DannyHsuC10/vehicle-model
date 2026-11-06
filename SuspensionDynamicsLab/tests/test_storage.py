@@ -7,7 +7,7 @@ import unittest
 
 import numpy as np
 
-from suspension_dynamics.project import default_project, save_project, load_project, estimate_damping
+from suspension_dynamics.project import default_project, save_project, load_project, estimate_damping, parameters_for_analysis
 from suspension_dynamics.engine import simulate
 from suspension_dynamics.storage import save_result, load_result, write_csv, write_report, import_legacy, fingerprint
 from suspension_dynamics.charts import envelope
@@ -26,20 +26,23 @@ class StorageTests(unittest.TestCase):
 
     def test_project_and_result_roundtrip_preserve_full_precision(self):
         r=self.result;path=self.root/'project.json';save_project(path,r.project)
-        self.assertEqual(load_project(path),r.project)
+        project = load_project(path)
+        self.assertEqual(project["parameters"]["full"], r.project["parameters"]["full"])
+        self.assertEqual(project["analysis"], default_project()["analysis"])
         path=self.root/'result.npz';save_result(path,r);loaded=load_result(path)
         self.assertEqual(loaded.info,r.info);self.assertEqual(loaded.project,r.project)
         for name in r.signals:np.testing.assert_array_equal(r.signals[name],loaded.signals[name])
 
     def test_legacy_mass_fields_migrate_for_projects_and_preserve_result_snapshots(self):
         project = copy.deepcopy(self.result.project)
+        project['parameters']['quarter'] = parameters_for_analysis(project, 'quarter')
         project['analysis']['quarter'].pop('parameter_corner')
         full = project['parameters']['full']
         full.pop('mu_f')
         full.pop('mu_r')
         full.update(mu_FL=11., mu_FR=15., mu_RL=19., mu_RR=23.)
         path = self.root/'legacy.json'
-        save_project(path, project)
+        path.write_text(json.dumps(project), encoding="utf-8")
         updated = load_project(path)
         self.assertEqual(updated['analysis']['quarter']['parameter_corner'], 'FL')
         self.assertEqual(updated['parameters']['full']['mu_f'], 13.)
@@ -50,6 +53,63 @@ class StorageTests(unittest.TestCase):
         loaded = load_result(self.root/'legacy.npz')
         self.assertEqual(loaded.project, original.project)
         self.assertNotEqual(loaded.signals['Normal load FL'][0], loaded.signals['Normal load FR'][0])
+
+    def test_compact_project_saves_one_parameter_group_and_result_keeps_resolved_fields(self):
+        project = default_project()
+        self.assertEqual(set(project['parameters']['quarter']), {'ks', 'cs', 'mr', 'zeta'})
+        self.assertEqual(set(project['parameters']['LR']), {'k_frame', 'c_frame', 'm_frame'})
+        self.assertEqual(project['parameters']['FR'], {})
+        path = self.root/'compact.json'
+        save_project(path, project)
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        self.assertNotIn("analysis", saved)
+        self.assertEqual(set(saved["parameters"]), {"full"})
+        loaded_project = load_project(path)
+        self.assertEqual(loaded_project["parameters"]["full"], project["parameters"]["full"])
+        self.assertEqual(loaded_project["parameters"]["LR"], project["parameters"]["LR"])
+        self.assertEqual(loaded_project["analysis"], project["analysis"])
+
+        project['analysis']['FR'].update(duration=.2, start=.01, dt=.003, parameter_axle='rear')
+        result = simulate(project, 'FR')
+        path = self.root/'resolved.npz'
+        save_result(path, result)
+        loaded = load_result(path)
+        self.assertEqual(loaded.project, result.project)
+        self.assertEqual(loaded.project['parameters']['FR']['k_heave_f'],
+                         2 * project['parameters']['full']['heave_r_k'])
+
+    def test_sizing_export_derives_quarter_from_main_and_tender(self):
+        project = default_project()
+        full = project["parameters"]["full"] | dict(
+            heave_f_k=20_000, roll_f_k=60_000, corner_FL_mr=.8, zeta=.65,
+            tender_enabled=True, tender_stiffness_N_per_m=80_000,
+            k_frame=900_000, c_frame=125, m_frame=50,
+        )
+        path = self.root / "initial_settings.json"
+        path.write_text(json.dumps({
+            "application": "VehicleInitialSizingLab-DynamicsExport", "schema_version": 1,
+            "name": "Sizing", "parameters": {"full": full},
+        }), encoding="utf-8")
+        loaded = load_project(path)
+        quarter = parameters_for_analysis(loaded, "quarter")
+        self.assertEqual(quarter["ks"], 25_000)
+        self.assertEqual(quarter["mr"], .8)
+        self.assertEqual(quarter["zeta"], .65)
+        self.assertAlmostEqual(quarter["cs"], 2 * .65 * np.sqrt(25_000 * quarter["ms"]) / .8)
+        self.assertEqual(loaded["parameters"]["LR"], dict(k_frame=900_000, c_frame=125, m_frame=50))
+        save_project(path, loaded)
+        self.assertEqual(load_project(path), loaded)
+
+    def test_legacy_half_car_import_has_geometry_for_playback(self):
+        path = self.root/'half.pkl'
+        path.write_bytes(pickle.dumps({
+            'data': {'t': np.array([0., .1]), 'front_zs': np.zeros(2)},
+            'metadata': {'config': {'family': 'FR'}},
+        }))
+        result = import_legacy(path)
+        parameters = result.project['parameters']['FR']
+        self.assertGreater(parameters['lf'], 0.)
+        self.assertGreater(parameters['lr'], 0.)
 
     def test_csv_and_report_include_units_and_input_snapshot(self):
         write_csv(self.root/'a.csv',self.result);write_report(self.root/'a.html',self.result)
@@ -73,7 +133,7 @@ class StorageTests(unittest.TestCase):
         self.assertIn(123,yd);self.assertIn(-55,yd);self.assertLessEqual(len(xd),202)
 
     def test_damping_estimator_does_not_mutate_settings(self):
-        p=default_project()['parameters']['quarter'];before=copy.deepcopy(p)
+        p=parameters_for_analysis(default_project(), 'quarter');before=copy.deepcopy(p)
         estimated=estimate_damping('quarter',p)
         self.assertEqual(p,before)
         self.assertAlmostEqual(estimated['cs']*p['mr']**2,2*p['zeta']*np.sqrt(p['ks']*p['mr']**2*p['ms']))

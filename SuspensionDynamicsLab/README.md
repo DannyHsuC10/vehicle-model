@@ -89,7 +89,11 @@ python -m pip install Pillow  # 僅 PNG 匯出需要
 
 修改參數後，按 **F5／計算此模型** 產生新的結果。需要查看已保存的 NPZ 或舊版 `result.pkl` 時，可從命令列以 `--result` 指定檔案。舊資料以原始符號與數值顯示，並提供 `raw:*` 欄位。舊資料的動畫採預設示意尺寸，舊參數可在「模型說明／計算快照」查看。
 
-PKL 匯入器只允許原 logger 使用的 NumPy 數值陣列類型，拒絕其他可執行物件。新 NPZ 格式不使用 pickle。**專案 JSON 只保存設定，分析結果另存 NPZ**；本工具 JSON 與另兩套工具不互通。
+PKL 匯入器只允許原 logger 使用的 NumPy 數值陣列類型，拒絕其他可執行物件。新 NPZ 格式不使用 pickle。
+
+專案 JSON 將車輛參數、阻尼比、車架傳力和 Tender 設定集中存入 `parameters.full`。開啟時套用內建的預設分析設定。需要保留當次分析輸入與計算結果時，請匯出 NPZ。
+
+可直接開啟 [Initial_settings.json](projects/Initial_settings.json) 或其他由 Initial Sizing 匯出的全車 JSON。載入單一參數區塊時，四分之一車的 `ks` 為「前 Heave 主簧與 Tender 串聯剛性，加上前 Roll 剛性，再除以 4」。前 Heave 主簧取 `4 × heave_f_k`，對應匯出時的全車 Heave 通道換算。Tender 停用或沒有有效剛性時，使用純主簧。`mr` 取 `corner_FL_mr`，`cs` 使用阻尼比、左前每輪簧上質量和 `ks` 估算。舊版分組 JSON 仍可開啟。
 
 ## 計算整理與適用範圍
 
@@ -108,7 +112,7 @@ PKL 匯入器只允許原 logger 使用的 NumPy 數值陣列類型，拒絕其�
 ```powershell
 python -m unittest discover -s tests -v
 python -m suspension_dynamics.cli --family full --model flex --scenario combined --duration 3 --output outputs/full_case
-python -m suspension_dynamics --project projects/example_project.json
+python -m suspension_dynamics --project projects/Initial_settings.json
 python -m suspension_dynamics --result outputs/full_case.npz
 ```
 

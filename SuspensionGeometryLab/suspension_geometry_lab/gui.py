@@ -794,7 +794,7 @@ class App(tk.Tk):
         ttk.Label(header, text="SUSPENSION GEOMETRY LAB", font=("Segoe UI", 19, "bold")).pack(side="left")
         self.project_label = ttk.Label(header, text=self.project["name"], foreground="#475569")
         self.project_label.pack(side="left", padx=20)
-        for text, command in (("共用車輛／懸吊設定", self.open_parameters), ("開啟專案", self.open_project),
+        for text, command in (("共用車輛／懸吊設定", self.open_parameters), ("匯入", self.open_project),
                               ("儲存專案", self.save), ("另存專案", lambda: self.save(True))):
             ttk.Button(header, text=text, command=command).pack(side="right", padx=4)
         self.notebook = ttk.Notebook(self)
