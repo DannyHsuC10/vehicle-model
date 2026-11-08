@@ -355,8 +355,41 @@ def validate_options(family, opt):
     return opt
 
 
+def _normalize_sizing_export(project):
+    sections = {}
+    for name in ("dynamics", "geometry", "vehicle"):
+        values = project.get(name)
+        if blank(values):
+            values = {}
+        if not isinstance(values, dict):
+            raise ValueError(f"{name} 必須為 JSON 物件。")
+        sections[name] = values
+
+    full = sections["vehicle"] | sections["dynamics"]
+    geometry = sections["geometry"].copy()
+    full.update({key: geometry.pop(key) for key in ("h_rc_f", "h_rc_r") if key in geometry})
+    geometry["vehicle"] = {key: full.pop(key) for key in ("gravity", "free_radius") if key in full}
+    if "clearance_steer_deg" in geometry:
+        geometry["vehicle"]["clearance_steer_deg"] = geometry.pop("clearance_steer_deg")
+    for section, fields in (
+        ("front", {"fvsa": "fvsa_f", "kpi_deg": "kpi_f_deg", "caster_deg": "caster_f_deg"}),
+        ("rear", {"fvsa": "fvsa_r", "kpi_deg": "kpi_r_deg", "caster_deg": "caster_r_deg"}),
+        ("analysis", {key: key for key in ("bump_mm", "droop_mm", "steer_deg")}),
+    ):
+        values = {key: geometry.pop(source) for key, source in fields.items() if source in geometry}
+        if values:
+            geometry[section] = values
+    return {
+        "application": "SuspensionDynamicsLab", "schema_version": 1, "name": project.get("name"),
+        "parameters": {"full": full}, "geometry": geometry,
+    }
+
+
 def read_project(path):
     project = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    if (isinstance(project, dict) and project.get("application") == "VehicleInitialSizingLab-DynamicsExport"
+            and project.get("schema_version") == 2):
+        project = _normalize_sizing_export(project)
     if (not isinstance(project, dict) or project.get("schema_version") != 1
             or project.get("application") not in ("SuspensionDynamicsLab", "VehicleInitialSizingLab-DynamicsExport")):
         raise ValueError("請開啟 SuspensionDynamicsLab 專案或 Initial Sizing 的全車參數 JSON。")

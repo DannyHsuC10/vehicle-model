@@ -39,7 +39,6 @@ GROUPS = (
         ("N", "Tender 頻率除數 N", "", {"hint": "僅在啟用 Tender 時使用"}),
         ("min_turn_radius_m", "最小轉彎半徑", "m"),
         ("kpi_deg", "主銷內傾角 KPI", "°", {"positive": False}),
-        ("caster_direction_check_deg", "方向驗證 Caster", "°", {"positive": False}),
         ("rc_chassis_stiffness_ratio", "前 RC 車體／懸吊剛性比", ""),
         ("anti_front_chassis_stiffness_N_per_m", "前 Anti 車體等效剛性", "N/m"),
         ("anti_rear_chassis_stiffness_N_per_m", "後 Anti 車體等效剛性", "N/m"),
@@ -118,6 +117,8 @@ def read_project(path):
             or type(project.get("schema_version")) is not int or project["schema_version"] != 1):
         raise ValueError("請選擇 VehicleInitialSizingLab 的版本 1 專案 JSON。")
     values = project.get("parameters")
+    if isinstance(values, dict):
+        values.pop("caster_direction_check_deg", None)  # Legacy projects stored the direction check angle.
     if not isinstance(values, dict) or values.keys() not in (FIELDS.keys(), FIELDS.keys() - {"zeta"}):
         raise ValueError("專案的車輛參數欄位不完整或無法辨識。")
     if "zeta" not in values:

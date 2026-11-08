@@ -126,6 +126,48 @@ class StorageTests(unittest.TestCase):
         save_project(path, loaded)
         self.assertEqual(load_project(path), loaded)
 
+    def test_categorized_sizing_export_loads_like_legacy(self):
+        parameters = default_project()["parameters"]
+        full = parameters["full"] | parameters["LR"] | {"zeta": 0.65, "c_frame": 125}
+        vehicle_keys = ("m", "lf", "lr", "tf", "tr", "h_cg", "Ixx", "Iyy", "mu_f", "mu_r")
+        geometry_keys = ("h_rc_f", "h_rc_r")
+        vehicle_geometry = {"gravity": 9.81, "free_radius": 0.2, "clearance_steer_deg": 27.0}
+        axle_geometry = {
+            "front": {"fvsa": 0.97, "kpi_deg": 8.0, "caster_deg": 6.3},
+            "rear": {"fvsa": 1.02, "kpi_deg": 9.0, "caster_deg": 0.0},
+            "analysis": {"bump_mm": 25.0, "droop_mm": 20.0, "steer_deg": 27.0},
+        }
+        header = {"application": "VehicleInitialSizingLab-DynamicsExport", "name": "Sizing"}
+        legacy = header | {
+            "schema_version": 1, "parameters": {"full": full},
+            "geometry": {"vehicle": vehicle_geometry} | axle_geometry,
+        }
+        categorized = header | {
+            "schema_version": 2,
+            "dynamics": {key: value for key, value in full.items() if key not in vehicle_keys + geometry_keys},
+            "geometry": {key: full[key] for key in geometry_keys} | {
+                "clearance_steer_deg": vehicle_geometry["clearance_steer_deg"],
+            },
+            "vehicle": {key: full[key] for key in vehicle_keys} | {
+                "gravity": vehicle_geometry["gravity"], "free_radius": vehicle_geometry["free_radius"],
+            },
+        }
+        nested = categorized | {"geometry": categorized["geometry"] | axle_geometry}
+        flattened = categorized | {"geometry": categorized["geometry"] | {
+            "fvsa_f": 0.97, "kpi_f_deg": 8.0, "caster_f_deg": 6.3,
+            "fvsa_r": 1.02, "kpi_r_deg": 9.0, "caster_r_deg": 0.0,
+            "bump_mm": 25.0, "droop_mm": 20.0, "steer_deg": 27.0,
+        }}
+        old_path = self.root / "legacy.json"
+        new_path = self.root / "categorized.json"
+        old_path.write_text(json.dumps(legacy), encoding="utf-8")
+        expected = load_project(old_path)
+        for export in (nested, flattened):
+            new_path.write_text(json.dumps(export), encoding="utf-8")
+            _, missing = read_import_project(new_path)
+            self.assertEqual(missing, [])
+            self.assertEqual(load_project(new_path), expected)
+
     def test_archived_results_keep_the_original_wheel_parameters(self):
         result = copy.deepcopy(self.result)
         full = self.legacy_wheel_parameters(result.project["parameters"]["full"])

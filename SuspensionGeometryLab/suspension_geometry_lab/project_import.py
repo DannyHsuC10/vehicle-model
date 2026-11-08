@@ -63,6 +63,76 @@ def _section(parent, key, fields, location):
     return value
 
 
+def _sizing_section(parent, key):
+    values = parent.get(key)
+    if _blank(values):
+        return {}
+    if not isinstance(values, dict):
+        raise ValueError(f"Initial Sizing 的 {key} 必須是 JSON 物件。")
+    return values
+
+
+def _sizing_tire_stiffness(dynamics):
+    stiffnesses = []
+    for end, corners in (("f", ("FL", "FR")), ("r", ("RL", "RR"))):
+        stiffness = dynamics.get(f"tire_{end}_k")
+        if not _blank(stiffness):
+            stiffnesses.append(stiffness)
+        else:
+            stiffnesses.extend(dynamics.get(f"tire_{corner}_k") for corner in corners)
+    stiffnesses = [value for value in stiffnesses if not _blank(value)]
+    if any(type(value) not in (int, float) or not math.isfinite(value) or value <= 0 for value in stiffnesses):
+        raise ValueError("Initial Sizing 的輪胎剛性須為大於 0 的有限數值（N/m）。")
+    if stiffnesses and all(value == stiffnesses[0] for value in stiffnesses):
+        return stiffnesses[0]
+    # Geometry uses a single stiffness. Ask for it when the supplied values differ.
+    return None
+
+
+def _sizing_project(source, target_version):
+    version = source.get("schema_version")
+    if type(version) is not int or version not in (1, 2):
+        raise ValueError("Initial Sizing 匯出檔須為 schema_version 1 或 2。")
+    geometry = _sizing_section(source, "geometry")
+    if version == 1:
+        dynamics = vehicle_data = _sizing_section(_sizing_section(source, "parameters"), "full")
+        environment = clearance_data = _sizing_section(geometry, "vehicle")
+        scan = _sizing_section(geometry, "analysis")
+    else:
+        dynamics = _sizing_section(source, "dynamics")
+        environment = vehicle_data = _sizing_section(source, "vehicle")
+        scan = clearance_data = geometry
+
+    vehicle = {key: vehicle_data.get(original) for key, original in (
+        ("mass", "m"), ("cg_to_front", "lf"), ("cg_height", "h_cg"),
+        ("track_front", "tf"), ("track_rear", "tr"), ("brake_bias_front", "brake_front"),
+        ("drive_force_front", "drive_front"),
+    )}
+    lf, lr = vehicle_data.get("lf"), vehicle_data.get("lr")
+    for key, value in (("lf", lf), ("lr", lr)):
+        if not _blank(value) and (type(value) not in (int, float) or not math.isfinite(value) or value <= 0):
+            raise ValueError(f"Initial Sizing 的 {key} 須為大於 0 的有限數值（m）。")
+    if not (_blank(lf) or _blank(lr)):
+        vehicle["wheelbase"] = lf + lr
+    vehicle.update(gravity=environment.get("gravity"), free_radius=environment.get("free_radius"),
+                   clearance_steer_deg=clearance_data.get("clearance_steer_deg"),
+                   tire_stiffness=_sizing_tire_stiffness(dynamics))
+
+    project = {"schema_version": target_version, "name": source.get("name"), "vehicle": vehicle,
+               "analysis": {key: scan.get(key) for key in ("bump_mm", "droop_mm", "steer_deg")}}
+    for axle, end, legacy_anti in (("front", "f", "dive_front"), ("rear", "r", "lift_rear")):
+        if version == 1:
+            axle_data = _sizing_section(geometry, axle)
+            design = {key: axle_data.get(key) for key in ("fvsa", "kpi_deg", "caster_deg")}
+            design["rc_height"] = dynamics.get(f"h_rc_{end}")
+        else:
+            design = {"fvsa": geometry.get(f"fvsa_{end}"), "kpi_deg": geometry.get(f"kpi_{end}_deg"),
+                      "caster_deg": geometry.get(f"caster_{end}_deg"), "rc_height": geometry.get(f"h_rc_{end}")}
+        design["anti"] = dynamics.get(f"anti_{axle}", dynamics.get(legacy_anti))
+        project[axle] = design
+    return project
+
+
 def _parameter_defaults(defaults, version):
     """Express the current baseline in the units and conventions of older files."""
     if version >= 6:
@@ -123,6 +193,9 @@ def _hardpoint_fields(project):
 
 def read_import_project(path):
     project = read_project(path)
+    defaults = default_project()
+    if isinstance(project, dict) and project.get("application") == "VehicleInitialSizingLab-DynamicsExport":
+        project = _sizing_project(project, defaults["schema_version"])
     version = project_version(project)
     allowed = {"schema_version", "name", "vehicle", "front", "rear", "analysis", "arm_mount_x", "hardpoints"}
     if version == 5:
@@ -131,7 +204,7 @@ def read_import_project(path):
         raise ValueError("需要 SuspensionGeometryLab 專案，檔案含未知欄位。")
 
     missing = []
-    defaults = _parameter_defaults(default_project(), version)
+    defaults = _parameter_defaults(defaults, version)
     if _blank(project.get("name")):
         missing.append(MissingField(("name",), "專案名稱", "", defaults["name"]))
     for group, fields in parameter_fields(version).items():

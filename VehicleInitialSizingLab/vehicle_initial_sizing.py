@@ -1176,7 +1176,7 @@ def _solve(
     brake_ax, target_lap_time_s, drive_target_speed_kmh,
     sus_travel, tf, tr, A_air, air_density_kg_per_m3,
     kf, kr, target_pitch_angle_deg, target_roll_angle_deg,
-    kpi_deg, min_turn_radius_m, caster_direction_check_deg,
+    kpi_deg, min_turn_radius_m,
     MR, zeta, sprung_roll_inertia_kg_m2, Kt, wl_mu_y, mu_w,
     R_tire, drive_motor_torque_Nm, drive_motor_rpm, N,
     rc_chassis_stiffness_ratio,
@@ -1444,11 +1444,15 @@ def _solve(
     emit(f"初始 Camber = 0 deg；採 sus_travel 對應的前軸最大 Roll；"
           f"KPI = {kpi_deg:g} deg，固定正方向 delta = {steering_angle_deg:+.6f} deg。")
     emit("delta 為公式中的前輪轉向角；方向盤角度需先依轉向比換算。公式內所有角度以 rad 計算。")
-    emit(f"方向驗證：固定較大的 Caster = {caster_direction_check_deg:g} deg；以下比較僅供查核，不修改設定。")
+    check_caster_deg = 10.0
+    emit(f"方向驗證：以固定 Caster = {check_caster_deg:g} deg 比較正、負轉向角。")
     steering_checks = []
     for check_angle in (abs(steering_angle_deg), -abs(steering_angle_deg)):
-        check_change = calculate_steering_camber(caster_direction_check_deg, kpi_deg, check_angle)
-        steering_checks.append({"steering_angle_deg": check_angle, "raw_camber_change_deg": check_change})
+        check_change = calculate_steering_camber(check_caster_deg, kpi_deg, check_angle)
+        steering_checks.append({
+            "caster_deg": check_caster_deg, "steering_angle_deg": check_angle,
+            "raw_camber_change_deg": check_change,
+        })
         emit(f"  驗證 delta = {check_angle:+.6f} deg：原式 Delta camber = {check_change:+.6f} deg，"
               f"絕對值 = {abs(check_change):.6f} deg")
     emit(f"轉向前 Camber = Roll + 輪胎 Roll - FVSA Camber 變化 "
@@ -1694,7 +1698,7 @@ def _solve(
         "use_tender", "ms", "mu", "h_cog", "lf", "lr", "ax", "ay", "a_acc", "brake_ax", "target_lap_time_s",
         "drive_target_speed_kmh", "sus_travel", "tf", "tr", "t", "A_air", "air_density_kg_per_m3",
         "kf", "kr", "target_pitch_angle_deg", "target_roll_angle_deg", "kpi_deg", "min_turn_radius_m",
-        "caster_direction_check_deg", "MR", "zeta", "sprung_roll_inertia_kg_m2", "Kt", "wl_mu_y", "mu_w",
+        "MR", "zeta", "sprung_roll_inertia_kg_m2", "Kt", "wl_mu_y", "mu_w",
         "R_tire", "drive_motor_torque_Nm", "drive_motor_rpm", "N", "rc_chassis_stiffness_ratio",
         "anti_front_chassis_stiffness_N_per_m", "anti_rear_chassis_stiffness_N_per_m",
         "F_ref_ratio", "wl_aero_front_ratio", "cg_safety_factor", "brake_driver_force_N",

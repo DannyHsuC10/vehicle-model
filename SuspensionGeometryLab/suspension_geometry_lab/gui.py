@@ -17,6 +17,8 @@ from .export import STEP_PAGES, point_rows, write_report, write_csv, write_step
 from . import hardpoints
 from .input_limits import FIELD_LIMITS, NAME_MAX_LENGTH, range_hint, round_design_input
 
+ROOT = Path(__file__).resolve().parent.parent
+PROJECTS = ROOT / "projects"
 FRAME_INTERVAL_MS = 16
 FORCE_SHARE_FIELDS = ("brake_bias_front", "drive_force_front")
 SV_ANTI_HINT = ("Anti 輸入與 SVSA 以朝另一軸為水平正向。前軸兩欄都填正值時，瞬心在接地點後上方。"
@@ -849,10 +851,20 @@ class App(tk.Tk):
         else:
             self.editor = ParameterEditor(self)
 
+    def project_dialog_dir(self):
+        if self.path is not None:
+            return self.path.parent.resolve()
+        return PROJECTS if PROJECTS.is_dir() else ROOT
+
     def save(self, save_as=False):
         path = None if save_as else self.path
         if path is None:
-            path = filedialog.asksaveasfilename(parent=self, title="儲存 SuspensionGeometryLab 專案", defaultextension=".json", filetypes=[("JSON project", "*.json")])
+            path = filedialog.asksaveasfilename(
+                parent=self, title="儲存 SuspensionGeometryLab 專案",
+                initialdir=self.project_dialog_dir(),
+                initialfile=self.path.name if self.path is not None else "suspension_geometry.json",
+                defaultextension=".json", filetypes=[("JSON project", "*.json")],
+            )
         if not path:
             return False
         try:
@@ -874,7 +886,10 @@ class App(tk.Tk):
     def open_project(self):
         if not self.confirm_unsaved():
             return
-        path = filedialog.askopenfilename(parent=self, title="開啟 SuspensionGeometryLab 專案", filetypes=[("JSON project", "*.json")])
+        path = filedialog.askopenfilename(
+            parent=self, title="開啟 SuspensionGeometryLab 專案",
+            initialdir=self.project_dialog_dir(), filetypes=[("JSON project", "*.json")],
+        )
         if path:
             self.import_project(path)
 

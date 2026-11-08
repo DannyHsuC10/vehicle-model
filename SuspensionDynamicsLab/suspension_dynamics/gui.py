@@ -25,6 +25,7 @@ from .dashboard import FullVehicleDashboard
 from .widgets import ScrollFrame
 
 ROOT = Path(__file__).resolve().parent.parent
+PROJECTS = ROOT / "projects"
 MODEL_NAMES = {family:{label:key for key,label in models.items()} for family,models in MODELS.items()}
 SCENARIO_KEYS = {value:key for key,value in SCENARIOS.items()}
 TARGET_KEYS = {value:key for key,value in TARGETS.items()}
@@ -709,9 +710,18 @@ class App(tk.Tk):
         if self.editor is not None and self.editor.winfo_exists():self.editor.destroy()
         self.dirty=False;self.update_title();self.status.set("專案已載入。按 F5 計算。")
 
+    def project_dialog_dir(self):
+        if self.project_path is not None:
+            return self.project_path.parent.resolve()
+        return PROJECTS if PROJECTS.is_dir() else ROOT
+
     def open(self):
-        if not self.discard_ok():return
-        path=filedialog.askopenfilename(parent=self,title="開啟懸吊動態專案",initialdir=ROOT/"projects",filetypes=[("專案 JSON","*.json")])
+        if not self.discard_ok():
+            return
+        path = filedialog.askopenfilename(
+            parent=self, title="開啟懸吊動態專案",
+            initialdir=self.project_dialog_dir(), filetypes=[("專案 JSON", "*.json")],
+        )
         if path:
             self.import_project(path)
 
@@ -733,13 +743,24 @@ class App(tk.Tk):
         except Exception as exc:
             messagebox.showerror("開啟失敗", str(exc), parent=self)
 
-    def save(self,as_new=False):
-        path=self.project_path
+    def save(self, as_new=False):
+        path = self.project_path
         if as_new or path is None:
-            path=filedialog.asksaveasfilename(parent=self,title="儲存專案",initialdir=ROOT/"projects",defaultextension=".json",filetypes=[("專案 JSON","*.json")])
-        if not path:return
-        try:save_project(path,self.project);self.project_path=Path(path);self.dirty=False;self.update_title();self.status.set(f"專案已儲存：{Path(path).name}")
-        except Exception as exc:messagebox.showerror("儲存失敗",str(exc),parent=self)
+            path = filedialog.asksaveasfilename(
+                parent=self, title="儲存專案", initialdir=self.project_dialog_dir(),
+                initialfile=path.name if path is not None else "suspension_dynamics.json",
+                defaultextension=".json", filetypes=[("專案 JSON", "*.json")],
+            )
+        if not path:
+            return
+        try:
+            save_project(path, self.project)
+            self.project_path = Path(path)
+            self.dirty = False
+            self.update_title()
+            self.status.set(f"專案已儲存：{self.project_path.name}")
+        except Exception as exc:
+            messagebox.showerror("儲存失敗", str(exc), parent=self)
 
     def calculate(self,panel,all_models=False):
         if self.busy:return

@@ -1,4 +1,4 @@
-"""Export full-vehicle Dynamics parameters from one sizing result."""
+"""Export suspension dynamics, geometry and vehicle parameters from one sizing result."""
 
 import json
 import math
@@ -69,15 +69,22 @@ def build_dynamics_export(snapshot, name):
     fvsa = snapshot["fvsa"]["前軸"]["fvsa_length_m"]
     steer = p["steering_angle_deg"]
     travel_mm = 1000 * p["sus_travel"]
+    vehicle = {key: full.pop(key) for key in (
+        "m", "lf", "lr", "tf", "tr", "h_cg", "Ixx", "Iyy", "mu_f", "mu_r", "drive_front", "brake_front",
+    )}
+    vehicle.update(gravity=p["g"], free_radius=p["R_tire"])
+    geometry = {
+        "h_rc_f": full.pop("h_rc_f"), "h_rc_r": full.pop("h_rc_r"),
+        "clearance_steer_deg": steer,
+        "fvsa_f": fvsa, "kpi_f_deg": p["kpi_deg"], "caster_f_deg": snapshot["caster"]["caster_deg"],
+        "fvsa_r": fvsa, "kpi_r_deg": p["kpi_deg"], "caster_r_deg": 0.0,
+        "bump_mm": travel_mm, "droop_mm": travel_mm, "steer_deg": steer,
+    }
     return {
         "application": "VehicleInitialSizingLab-DynamicsExport",
-        "schema_version": 1,
+        "schema_version": 2,
         "name": name,
-        "parameters": {"full": full},
-        "geometry": {
-            "vehicle": {"gravity": p["g"], "free_radius": p["R_tire"], "clearance_steer_deg": steer},
-            "front": {"fvsa": fvsa, "kpi_deg": p["kpi_deg"], "caster_deg": snapshot["caster"]["caster_deg"]},
-            "rear": {"fvsa": fvsa, "kpi_deg": p["kpi_deg"], "caster_deg": 0.0},
-            "analysis": {"bump_mm": travel_mm, "droop_mm": travel_mm, "steer_deg": steer},
-        },
+        "dynamics": full,
+        "geometry": geometry,
+        "vehicle": vehicle,
     }

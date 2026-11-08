@@ -140,7 +140,7 @@ def _render_basics(r, s):
         "drive_target_speed_kmh": "km/h", "R_tire": "m", "drive_motor_torque_Nm": "N·m",
         "drive_motor_rpm": "rpm", "brake_driver_force_N": "N", "sprung_roll_inertia_kg_m2": "kg·m²",
         "target_pitch_angle_deg": "deg", "target_roll_angle_deg": "deg", "kpi_deg": "deg",
-        "caster_direction_check_deg": "deg", "use_tender": "是否使用 Tender 彈簧",
+        "use_tender": "是否使用 Tender 彈簧",
         "active_heave_spring_N_per_m": "N/m（本次採用的 Heave 剛性）",
         "anti_front_chassis_stiffness_N_per_m": "N/m（前軸車體垂向等效剛性，固定估值）",
         "anti_rear_chassis_stiffness_N_per_m": "N/m（後軸車體垂向等效剛性，固定估值）",
@@ -438,9 +438,9 @@ def _render_basics(r, s):
     r.eq(r"R=\frac{L}{\tan\delta},\quad \delta_{\max}=\arctan\left(\frac{L}{R_{\min}}\right)",
          r"\delta_{\max}=\arctan\left(\frac{@L@}{@R@}\right)=@rad@\ \mathrm{rad}=@deg@^\circ",
          L=p["L"], R=p["min_turn_radius_m"], rad=delta, deg=p["steering_angle_deg"])
-    r.text("單軌等效前輪角取已確認的正方向。方向查核只列印比較，不修改設定；整式的座標負號固定為 −1。")
+    r.text("單軌等效前輪角取已確認的正方向。方向查核以固定 Caster 比較正、負轉向角。整式的座標負號固定為 −1。")
     r.table(["方向驗證 Caster deg", "轉向角 deg", "原式 Camber 變化 deg"],
-            [(p["caster_direction_check_deg"], item["steering_angle_deg"], item["raw_camber_change_deg"])
+            [(item["caster_deg"], item["steering_angle_deg"], item["raw_camber_change_deg"])
              for item in s["steering_checks"]])
     front = s["fvsa"]["前軸"]
     tilt = s["lateral_tire_roll"]["前軸"]
