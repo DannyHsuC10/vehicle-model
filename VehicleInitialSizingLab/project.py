@@ -4,8 +4,6 @@ import json
 import math
 from pathlib import Path
 
-from dynamics_export import default_export_settings, validate_export_settings
-
 PROJECT_FORMAT = "VehicleInitialSizingLab"
 
 # Numeric fields are positive by default. Bounds are inclusive unless positive is set.
@@ -32,6 +30,7 @@ GROUPS = (
     ("懸吊與轉向", "懸吊", (
         ("use_tender", "使用 Tender 彈簧", ""),
         ("MR", "運動比 MR", ""),
+        ("zeta", "目標阻尼比 ζ", "", {"positive": False, "min": 0}),
         ("sus_travel", "懸吊壓縮行程", "m", {"max": 0.05}),
         ("target_pitch_angle_deg", "允許俯仰角", "°", {"min": 0.1, "max": 3}),
         ("target_roll_angle_deg", "允許側傾角", "°", {"min": 0.1, "max": 3}),
@@ -113,20 +112,21 @@ def validate_inputs(values):
     return values
 
 
-def read_project(path, *, include_dynamics=False):
+def read_project(path):
     project = json.loads(path.read_text(encoding="utf-8-sig"))
     if (not isinstance(project, dict) or project.get("application") != PROJECT_FORMAT
             or type(project.get("schema_version")) is not int or project["schema_version"] != 1):
         raise ValueError("請選擇 VehicleInitialSizingLab 的版本 1 專案 JSON。")
     values = project.get("parameters")
-    if not isinstance(values, dict) or values.keys() != FIELDS.keys():
+    if not isinstance(values, dict) or values.keys() not in (FIELDS.keys(), FIELDS.keys() - {"zeta"}):
         raise ValueError("專案的車輛參數欄位不完整或無法辨識。")
-    validate_inputs(values)
-    if include_dynamics:
-        settings = project["dynamics_export"] if "dynamics_export" in project else default_export_settings()
-        return values | validate_export_settings(settings)
-    return values
+    if "zeta" not in values:
+        # Version 1 projects originally stored the target ratio on the Dynamics tab.
+        settings = project.get("dynamics_export", {})
+        legacy_zeta = settings.get("zeta", 0.7) if isinstance(settings, dict) else 0.7
+        values = {**values, "zeta": legacy_zeta}
+    return validate_inputs(values)
 
 
-def default_project(*, include_dynamics=False):
-    return read_project(Path(__file__).with_name("default_project.json"), include_dynamics=include_dynamics)
+def default_project():
+    return read_project(Path(__file__).with_name("default_project.json"))

@@ -9,8 +9,8 @@ import math
 import numpy as np
 
 from .catalog import CORNERS, MODELS
-from .project import (PARAMETER_SOURCES, full_mass_distribution, parameters_for_analysis,
-                      validate, validate_parameters, wheel_rates)
+from .project import (MODAL_CHANNELS, PARAMETER_SOURCES, corner_rates, full_mass_distribution,
+                      migrate_project_parameters, parameters_for_analysis, validate, validate_parameters, wheel_rates)
 from .road_profiles import ISO_FREQUENCY_BAND, ISO_REFERENCE_FREQUENCY, ISO_ROUGHNESS, IsoRoadProfile
 
 G = 9.81
@@ -19,8 +19,7 @@ LONGITUDINAL_SCENARIOS = ("accelerate", "combined")
 LATERAL_SCENARIOS = ("cornering", "bump_cornering", "combined")
 FULL_T = np.array([[1,1,0,0], [0,0,1,1], [1,-1,0,0], [0,0,1,-1],
                    [1,-1,1,-1], [1,-1,-1,1], *np.eye(4)], dtype=float)
-CHANNEL_NAMES = ("heave_f", "heave_r", "roll_f", "roll_r", "roll_c", "warp",
-                 "corner_FL", "corner_FR", "corner_RL", "corner_RR")
+CHANNEL_NAMES = (*MODAL_CHANNELS, *(f"corner_{corner}" for corner in CORNERS))
 
 
 class Cancelled(Exception):
@@ -57,6 +56,22 @@ class System:
         """External generalized forces, including exact road z and dz/dt."""
         return self.input_force(*road.at(time))
 
+    def _longitudinal_anti(self, ax, moment):
+        p = self.p
+        transfer = moment / (p["lf"] + p["lr"])
+        if "anti_front" in p:
+            return transfer * p["anti_front"], -transfer * p["anti_rear"]
+
+        # Archived results use their original formula for equilibrium statistics.
+        if self.family == "FR":
+            anti = p["anti_squat_rear"] if ax >= 0 else p["anti_dive_front"]
+            return transfer * anti, -transfer * anti
+        drive = ax >= 0
+        ratio = p["drive_front" if drive else "brake_front"]
+        anti_f = p["lift_front" if drive else "dive_front"]
+        anti_r = p["squat_rear" if drive else "lift_rear"]
+        return moment * ratio * anti_f / p["lf"], -moment * (1 - ratio) * anti_r / p["lr"]
+
     def input_force(self, zr, vr, ax, ay):
         force = np.zeros(self.dof)
         if self.tire_dof:
@@ -84,8 +99,7 @@ class System:
             moment = 2*(p["ms"]+p["mu"])*ax*p["h_cg"]
             force[1] += moment
             if self.tire_dof:
-                anti = p["anti_squat_rear"] if ax >= 0 else p["anti_dive_front"]
-                geo[:] = np.array([1., -1.])*moment*anti/(p["lf"]+p["lr"])
+                geo[:] = self._longitudinal_anti(ax, moment)
         elif self.family == "full":
             share = p["lr"]/(p["lf"]+p["lr"])
             mx = p["m"]*ay*p["h_cg"]
@@ -97,12 +111,7 @@ class System:
             gf = p["m"]*ay*share*p["h_rc_f"]/p["tf"]
             gr = p["m"]*ay*(1-share)*p["h_rc_r"]/p["tr"]
             geo[:] = [gf, -gf, gr, -gr]
-            drive = ax >= 0
-            ratio = p["drive_front" if drive else "brake_front"]
-            anti_f = p["lift_front" if drive else "dive_front"]
-            anti_r = p["squat_rear" if drive else "lift_rear"]
-            gf = p["m"]*ax*ratio*p["h_cg"]*anti_f/p["lf"]
-            gr = -p["m"]*ax*(1-ratio)*p["h_cg"]*anti_r/p["lr"]
+            gf, gr = self._longitudinal_anti(ax, my)
             geo += np.array([gf, gf, gr, gr])/2
         if self.tire_dof:
             force[:self.body_dof] -= self.B.T @ geo
@@ -165,10 +174,11 @@ def assemble(family, model, p):
                           [1,0,p["tr"]/2,-p["lr"]], [1,0,-p["tr"]/2,-p["lr"]]])
             masses = [ms, p["Ixx"]*share, p["Ixx"]*(1-share), p["Iyy"]]
         T = FULL_T
-        kvals = np.array([p[f"{n}_k"]*p[f"{n}_mr"]**2 for n in CHANNEL_NAMES])
-        cvals = np.array([p[f"{n}_c"]*p[f"{n}_mr"]**2 for n in CHANNEL_NAMES])
+        rates = [wheel_rates(p, channel) for channel in MODAL_CHANNELS]
+        rates.extend(corner_rates(p, "corner", corner) for corner in CORNERS)
+        kvals, cvals = np.asarray(rates).T
         ks, cs = T.T @ np.diag(kvals) @ T, T.T @ np.diag(cvals) @ T
-        kt, ct = zip(*(wheel_rates(p, f"tire_{corner}") for corner in CORNERS))
+        kt, ct = zip(*(corner_rates(p, "tire", corner) for corner in CORNERS))
         static = [(ms * (share if corner.startswith("F") else 1 - share) / 2 + corner_masses[corner]) * G
                   for corner in CORNERS]
     else:
@@ -224,6 +234,7 @@ class Road:
         target = options["target"]
         self.mask = np.array([self.matches(label, target, system.family) for label in system.labels], dtype=float)
         scenario = options["scenario"]
+        events = {0., options["duration"], options["start"]}
         if scenario == "random":
             rng = np.random.default_rng(int(options["seed"]))
             count = math.ceil(options["duration"] / options["random_interval"]) + 3
@@ -231,7 +242,10 @@ class Road:
             self.random[0] = 0.
         elif scenario in ISO_ROUGHNESS:
             self.iso_profile = IsoRoadProfile(ISO_ROUGHNESS[scenario], options["seed"])
-        events = {0., options["duration"], options["start"]}
+            starts = options["start"] + self.delays
+            # Wheels with the same onset share one profile sample.
+            self.iso_onsets = [(start, starts == start) for start in np.unique(starts[self.mask != 0])]
+            events.update(start for start, _ in self.iso_onsets)
         if scenario not in ISO_ROUGHNESS:
             events.add(options["start"]+options["ramp"])
         if scenario in (*BUMP_SCENARIOS, "step", "sine", "random"):
@@ -277,10 +291,13 @@ class Road:
             fraction = pos-index
             z[active] = self.random[index]*(1-fraction)+self.random[index+1]*fraction
             v[active] = (self.random[index+1]-self.random[index])/o["random_interval"]
-        elif scenario in ISO_ROUGHNESS and active[0]:
+        elif scenario in ISO_ROUGHNESS:
             speed = o["speed"]
-            z[0], slope = self.iso_profile.at(speed * t[0])
-            v[0] = speed * slope
+            for start, wheels in self.iso_onsets:
+                if time >= start:
+                    height, slope = self.iso_profile.at(speed * (time - start))
+                    z[wheels] = height
+                    v[wheels] = speed * slope
         ramp_t = max(0., min(1., (time-o["start"])/o["ramp"]))
         ramp = (1-math.cos(math.pi*ramp_t))/2
         ax = o["ax"] * ramp if scenario in LONGITUDINAL_SCENARIOS else 0.
@@ -322,6 +339,7 @@ class Result:
 
 
 def simulate(project, family, cancel=lambda: False, progress=lambda fraction: None, initial=None):
+    project = migrate_project_parameters(project)
     validate(project)
     options = project["analysis"][family]
     model = options["model"]

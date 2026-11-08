@@ -6,6 +6,8 @@ from io import StringIO
 import math
 import re
 
+from dynamics_export import damping_coefficients, frame_parameters
+
 
 def _number(value):
     if value is None:
@@ -332,7 +334,7 @@ def _render_basics(r, s):
     values = s["anti"]["heave_only"]
     spring = s["tire"]["Ks_pitch_N_per_m"]
     for axle, axle_label in (("front", "前軸剛性基準（前 Anti-dive）"),
-                             ("rear", "後軸剛性基準（AntiScrub 來源）")):
+                             ("rear", "後軸剛性基準（後 Anti-squat 來源）")):
         x = values[axle]
         r.heading(axle_label, 4)
         r.eq(r"K_{z,i}=K_{h,i}MR^2,\quad K_{c,i}=\text{固定輸入}",
@@ -346,34 +348,32 @@ def _render_basics(r, s):
              r"K_{\mathrm{eq},i,\min}=\frac{@kz@\cdot@kc@}{@kz@+@kc@}=@eq@\ \mathrm{N/m}",
              kz=x["suspension_stiffness_N_per_m"], kc=x["chassis_stiffness_N_per_m"],
              eq=x["equivalent_stiffness_N_per_m"])
-    r.heading("AntiScrub、前後 Anti-lift 與後 Anti-squat", 3)
+    r.heading("前 Anti-dive、後 Anti-squat 與前後 Anti-lift", 3)
     r.eq(r"\mathrm{AntiDive}_f=a_f",
          r"\mathrm{AntiDive}_f=@a@=@percent@\%",
          a=values["front_anti_dive_ratio"], percent=values["front_anti_dive_percent"])
-    r.eq(r"\mathrm{AntiScrub}=a_r\frac{a_{\mathrm{acc}}}{a_x}",
-         r"\mathrm{AntiScrub}=@raw@\frac{@acc@}{@ax@}=@scrub@=@percent@\%",
+    r.eq(r"\mathrm{AntiSquat}_r=a_r\frac{a_{\mathrm{acc}}}{a_x}",
+         r"\mathrm{AntiSquat}_r=@raw@\frac{@acc@}{@ax@}=@ratio@=@percent@\%",
          raw=values["rear"]["anti_ratio"], acc=p["a_acc"], ax=p["ax"],
-         scrub=values["anti_scrub_ratio"], percent=values["anti_scrub_percent"])
-    r.eq(r"\mathrm{AntiLift}_r=\mathrm{AntiDive}_f,\quad \mathrm{AntiLift}_f=\mathrm{AntiScrub}",
+         ratio=values["rear_anti_squat_ratio"], percent=values["rear_anti_squat_percent"])
+    r.eq(r"\mathrm{AntiLift}_r=\mathrm{AntiDive}_f,\quad \mathrm{AntiLift}_f=\mathrm{AntiSquat}_r",
          r"\mathrm{AntiLift}_r=@rear@=@rear_percent@\%,\quad{}"
          r"\mathrm{AntiLift}_f=@front@=@front_percent@\%",
          rear=values["rear_anti_lift_ratio"], rear_percent=values["rear_anti_lift_percent"],
          front=values["front_anti_lift_ratio"], front_percent=values["front_anti_lift_percent"])
-    r.eq(r"\mathrm{AntiSquat}_r=\mathrm{AntiLift}_f",
-         r"\mathrm{AntiSquat}_r=@ratio@=@percent@\%",
-         ratio=values["rear_anti_squat_ratio"], percent=values["rear_anti_squat_percent"])
     r.table(["設定項目", "比例", "百分比", "來源"], (
         ("前 Anti-dive", values["front_anti_dive_ratio"], values["front_anti_dive_percent"], "前軸剛性基準"),
-        ("AntiScrub", values["anti_scrub_ratio"], values["anti_scrub_percent"], "後軸剛性基準 × a_acc / ax"),
         ("後 Anti-lift", values["rear_anti_lift_ratio"], values["rear_anti_lift_percent"], "等於前 Anti-dive"),
-        ("前 Anti-lift", values["front_anti_lift_ratio"], values["front_anti_lift_percent"], "等於 AntiScrub"),
-        ("後 Anti-squat", values["rear_anti_squat_ratio"], values["rear_anti_squat_percent"], "等於前 Anti-lift"),
+        ("後 Anti-squat", values["rear_anti_squat_ratio"], values["rear_anti_squat_percent"], "後軸剛性基準 × a_acc / ax"),
+        ("前 Anti-lift", values["front_anti_lift_ratio"], values["front_anti_lift_percent"], "等於後 Anti-squat"),
+        ("前 Anti", values["front_anti_ratio"], values["front_anti_percent"], "取前 Anti-dive 與前 Anti-lift 的較大值"),
+        ("後 Anti", values["rear_anti_ratio"], values["rear_anti_percent"], "取後 Anti-squat 與後 Anti-lift 的較大值"),
     ))
-    r.text("Anti 目前只使用純 Heave 主簧；後軸剛性基準經 a_acc／ax 換算為 AntiScrub，"
-           "後 Anti-lift 則依指定關係取前 Anti-dive。程式參數 a_acc 對應加速目標，與 ax 均以 g 輸入。"
+    r.text("Anti 使用純 Heave 主簧。後 Anti-squat 由後軸剛性基準乘以 a_acc／ax 得出。"
+           "程式參數 a_acc 對應加速目標，與 ax 均以 g 輸入。"
            "此為兩路剛性類比及指定比例設定；幾何硬點與實際煞車力路徑不在此求解。")
-    r.text("加速工況將後 Anti-squat 設為前 Anti-lift。以 Dynamics 的全車力公式套用相同係數時，"
-           "前後驅動力各占 50% 才會得到相同大小的前後 Anti 力矩貢獻。")
+    r.text("加速工況將前 Anti-lift 設為後 Anti-squat。以 Dynamics 的全車力公式套用相同係數時，"
+           "前後驅動力各占 50% 會得到相同大小的前後 Anti 力矩貢獻。")
 
     r.heading("10. 前 Roll Center 與 11. 後 Roll Center")
     rc = s["front_rc"]
@@ -632,7 +632,8 @@ def _render_modes(r, s):
     r.heading("17. Roll、Heave + Tender 與純 Heave 的前後臨界阻尼" if p["use_tender"]
               else "17. Roll 與純 Heave 的前後臨界阻尼")
     r.text("每軸各一支 Roll 和 Heave 阻尼器；彈簧與阻尼器共用 MR。此節採固定輪端的單自由度參考。")
-    r.eq(r"c_{\mathrm{crit}}=2\sqrt{km},\quad \zeta=\frac{c}{2\sqrt{km}}=1")
+    r.eq(r"c_{\mathrm{crit}}=2\sqrt{km},\quad \zeta=\frac{c}{c_{\mathrm{crit}}},\quad c=\zeta c_{\mathrm{crit}}",
+         r"\zeta_{\mathrm{target}}=@zeta@", zeta=p["zeta"])
     r.eq(r"K_\phi=K_{\phi f}+K_{\phi r},\quad C_{\phi,\mathrm{crit}}=2\sqrt{K_\phi I_{xx,s}}",
          r"K_\phi=@f@+@b@=@K@\ \mathrm{Nm/rad},\quad C_{\phi,\mathrm{crit}}=2\sqrt{@K@\cdot@I@}=@C@\ \mathrm{Nm\,s/rad}",
          f=d["roll"]["front"]["angular_stiffness_Nm_per_rad"], b=d["roll"]["rear"]["angular_stiffness_Nm_per_rad"],
@@ -671,7 +672,30 @@ def _render_modes(r, s):
                  K=x["body_stiffness_N_per_m"], m=x["sprung_mass_kg"],
                  cz=x["body_critical_damping_Ns_per_m"], mr=p["MR"], cd=x["damper_critical_damping_Ns_per_m"])
 
-    r.heading("18. 四種指定 Ks：前後 Ks → Kw → Kr、自然頻率及臨界阻尼")
+    r.heading("Dynamics 匯出阻尼與車架傳力", 3)
+    r.text("純 Heave 通道使用兩輪位移總和，剛性與阻尼係數各除以 4。Roll 使用阻尼器端係數，四輪使用相同的胎剛性與單輪簧下質量。")
+    coefficients = damping_coefficients(s)
+    for end, axle, label in (("f", "front", "前軸"), ("r", "rear", "後軸")):
+        r.text(label)
+        r.eq(r"c_{\mathrm{heave,JSON}}=\frac{\zeta c_{\mathrm{heave,crit}}}{4},\quad{}"
+             r"c_{\mathrm{roll,JSON}}=\zeta c_{\mathrm{roll,crit}}",
+             r"c_{\mathrm{heave,JSON}}=\frac{@z@\cdot @h@}{4}=@hc@\ \mathrm{N\,s/m},\quad{}"
+             r"c_{\mathrm{roll,JSON}}=@z@\cdot @r@=@rc@\ \mathrm{N\,s/m}",
+             z=p["zeta"], h=d["pure_heave"][axle]["damper_critical_damping_Ns_per_m"],
+             r=d["roll"][axle]["damper_critical_damping_Ns_per_m"],
+             hc=coefficients[f"heave_{end}_c"], rc=coefficients[f"roll_{end}_c"])
+    r.eq(r"c_{\mathrm{tire}}=2\zeta\sqrt{K_t m_u}",
+         r"c_{\mathrm{tire}}=2\cdot @z@\sqrt{@Kt@\cdot @mu@}=@c@\ \mathrm{N\,s/m}",
+         z=p["zeta"], Kt=p["Kt"], mu=p["mu"], c=coefficients["tire_c"])
+    frame = frame_parameters(s)
+    r.eq(r"m_{\mathrm{frame}}=\frac{M_s}{4},\quad k_{\mathrm{frame}}=10K_{\mathrm{roll}}",
+         r"m_{\mathrm{frame}}=\frac{@ms@}{4}=@m@\ \mathrm{kg},\quad{}"
+         r"k_{\mathrm{frame}}=10\cdot @kr@=@k@\ \mathrm{N/m}",
+         ms=p["ms"], m=frame["m_frame"], kr=s["selected_stiffness"]["roll"]["stiffness_N_per_m"],
+         k=frame["k_frame"])
+    r.text("車架傳力採選定的線性 Roll 剛性（N/m）。")
+
+    r.heading("18. 四種指定 Ks：前後 Ks → Kw → Kr、自然頻率、臨界阻尼與目標阻尼")
     heave_symbol = r"K_{ht}" if p["use_tender"] else r"K_h"
     r.eq((r"K_s^{(1)}=\frac{K_{ht}+K_{\mathrm{roll}}}{2},\quad K_s^{(2)}=K_{ht},\quad{}"
           r"K_s^{(3)}=K_{\mathrm{roll}},\quad K_s^{(4)}=K_{\mathrm{heaveonly}}")
@@ -684,6 +708,9 @@ def _render_modes(r, s):
     r.eq(r"f_{Ks}=\frac{1}{2\pi}\sqrt{\frac{K_s}{m_{s,\mathrm{coord}}}},\quad{}"
          r"f_{Kw}=\frac{1}{2\pi}\sqrt{\frac{K_w}{m_w}},\quad f_{Kr}=\frac{1}{2\pi}\sqrt{\frac{K_r}{m_w}}")
     r.eq(r"c_{Ks}=2\sqrt{K_sm_{s,\mathrm{coord}}},\quad c_{Kw}=2\sqrt{K_wm_w},\quad c_{Kr}=2\sqrt{K_rm_w}")
+    zeta = p["zeta"]
+    r.eq(r"c_{\mathrm{target},j}=\zeta c_j,\quad j\in\{Ks,Kw,Kr\}",
+         r"\zeta=@zeta@", zeta=zeta)
     heave_label = "Kht" if p["use_tender"] else "Kheave"
     cases = (("combined_average", f"({heave_label} + Kroll)/2"), ("heave_with_tender", heave_label),
              ("roll", "Kroll"), ("heave_only", "Kheaveonly"))
@@ -714,13 +741,18 @@ def _render_modes(r, s):
             for stage, stiffness, mass in (("Ks", ks, x["spring_coordinate_mass_kg"]),
                                             ("Kw", kw, x["sprung_mass_per_wheel_kg"]),
                                             ("Kr", kr, x["sprung_mass_per_wheel_kg"])):
+                critical = x[f"critical_damping_{stage}_Ns_per_m"]
                 r.eq(r"f_{" + stage + r"}=\frac{1}{2\pi}\sqrt{\frac{K}{m}},\quad c_{" + stage + r"}=2\sqrt{Km}",
                      r"f=\frac{1}{2\pi}\sqrt{\frac{@K@}{@m@}}=@f@\ \mathrm{Hz},\quad{}"
                      r"c=2\sqrt{@K@\cdot@m@}=@c@\ \mathrm{N\,s/m}",
-                     K=stiffness, m=mass, f=x[f"frequency_{stage}_Hz"], c=x[f"critical_damping_{stage}_Ns_per_m"])
-            summary.append((label, case_label, ks, kw, kr, x["frequency_Kr_Hz"], x["critical_damping_Kr_Ns_per_m"]))
-    r.table(["軸別", "案例", "Ks N/m", "Kw N/m", "Kr N/m", "fKr Hz", "cKr N·s/m"], summary)
-    r.text("fKs = fKw 是座標一致性的結果。Kr 的臨界阻尼為 ride 等效單自由度參考，"
+                     K=stiffness, m=mass, f=x[f"frequency_{stage}_Hz"], c=critical)
+                r.eq(rf"c_{{\mathrm{{target}},{stage}}}=\zeta c_{{{stage}}}"
+                     rf"={_number(zeta)}\cdot {_number(critical)}={_number(zeta * critical)}\ \mathrm{{N\,s/m}}")
+            critical_kr = x["critical_damping_Kr_Ns_per_m"]
+            summary.append((label, case_label, ks, kw, kr, x["frequency_Kr_Hz"], critical_kr, zeta * critical_kr))
+    r.table(["軸別", "案例", "Ks N/m", "Kw N/m", "Kr N/m", "fKr Hz",
+             "Kr 臨界阻尼 N·s/m", "Kr 目標阻尼 N·s/m"], summary)
+    r.text("fKs = fKw 是座標一致性的結果。Kr 的臨界與目標阻尼為 ride 等效單自由度參考，"
            "不直接代表實體阻尼器係數；Kroll 案例也不是以轉動慣量求得的整車 Roll 模態頻率。")
 
     r.heading("19. Roll 與 Pitch gradient")
@@ -764,7 +796,7 @@ def _render_modes(r, s):
     r.eq(r"G_{\mathrm{pitch,total}}=G_{s,f}+G_{s,r}+G_{\mathrm{pitch},t},\quad{}"
          r"G_{s,i}=\frac{Mgh}{L^2K_{z,i}}\frac{180}{\pi}")
     r.text("前後 Anti 修正僅用於純 Heave 主簧的煞車工況，使用設定後的前 Anti-dive 與後 Anti-lift；"
-           "後 Anti-lift 等於前 Anti-dive。AntiScrub 與前 Anti-lift 列為設定值，不代入本煞車 Pitch。")
+           "後 Anti-lift 等於前 Anti-dive。")
     for mode, label in (("heave_with_tender", "Heave + Tender"), ("heave_only", "純 Heave")):
         if mode == "heave_with_tender" and not p["use_tender"]:
             continue

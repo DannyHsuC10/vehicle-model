@@ -27,6 +27,7 @@
     "min_turn_radius_m": 3.0,
     "caster_direction_check_deg": 10.0,
     "MR": 1.0,
+    "zeta": 0.7,
     "sprung_roll_inertia_kg_m2": 7.917820044730256,
     "Kt": 80000.0,
     "wl_mu_y": 1.81526957993174,

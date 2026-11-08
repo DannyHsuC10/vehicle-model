@@ -11,10 +11,11 @@ from tkinter import ttk, filedialog, messagebox
 import numpy as np
 
 from .catalog import FAMILIES, MODELS, SCENARIOS, TARGETS, NOTES, scenarios, targets
-from .project import (FIELDS, LINKED_LOCAL_FIELDS, INPUT_FIELDS, ESTIMATED_DAMPING, LR_WHEEL_FIELDS,
-                      PARAMETER_SOURCES, default_project, link_full_parameters,
-                      load_project, parameters_for_analysis, save_project, validate, validate_options,
+from .project import (FIELDS, FULL_CHANNEL_LABELS, LINKED_LOCAL_FIELDS, INPUT_FIELDS, ESTIMATED_DAMPING,
+                      PARAMETER_SOURCES, default_project, link_full_parameters, migrate_parameters, migrate_project_parameters,
+                      parameters_for_analysis, prepare_project, save_project, validate, validate_options,
                       validate_parameters)
+from .project_import import fill_import_project, read_import_project
 from .engine import simulate, Cancelled
 from .road_profiles import ISO_ROUGHNESS
 from .storage import (save_result, load_result, import_legacy, write_csv, write_report,
@@ -27,6 +28,71 @@ ROOT = Path(__file__).resolve().parent.parent
 MODEL_NAMES = {family:{label:key for key,label in models.items()} for family,models in MODELS.items()}
 SCENARIO_KEYS = {value:key for key,value in SCENARIOS.items()}
 TARGET_KEYS = {value:key for key,value in TARGETS.items()}
+
+
+class ImportRepairDialog(tk.Toplevel):
+    def __init__(self, app, project, fields):
+        super().__init__(app)
+        self.project = project
+        self.fields = fields
+        self.repaired = None
+        self.title("補齊專案缺失欄位")
+        self.geometry(f"820x{min(620, 195 + 48 * len(fields))}")
+        self.minsize(700, 240)
+        self.transient(app)
+        self.bind("<Escape>", lambda event: self.destroy())
+        header = ttk.Frame(self, padding=(14, 10, 14, 4))
+        header.pack(fill="x")
+        ttk.Button(header, text="取消", command=self.destroy).pack(side="right")
+        ttk.Button(header, text="補齊並匯入", command=self.apply).pack(side="right", padx=(0, 8))
+        ttk.Label(header, text=f"找到 {len(fields)} 個缺失欄位",
+                  font=("Microsoft JhengHei UI", 13, "bold")).pack(side="left")
+        ttk.Label(self, text="可逐欄自行輸入，留空就使用該欄的預設值。已有資料會保留。",
+                  padding=(14, 0, 14, 10)).pack(anchor="w")
+
+        scroll = ScrollFrame(self, padding=(14, 0))
+        scroll.pack(fill="both", expand=True)
+        self.canvas = scroll.canvas
+        table = scroll.content
+        table.columnconfigure(0, weight=1)
+        for column, heading in enumerate(("缺失欄位／JSON 路徑", "預設值", "自行輸入（可留空）")):
+            ttk.Label(table, text=heading, padding=6).grid(row=0, column=column, sticky="w")
+        self.inputs = []
+        for row, field in enumerate(fields, start=1):
+            label = f"{field.label} ({field.unit})" if field.unit else field.label
+            ttk.Label(table, text=f"{label}\n{field.location}", padding=(6, 4)).grid(row=row, column=0, sticky="w")
+            ttk.Label(table, text=str(field.default), padding=6).grid(row=row, column=1, sticky="w")
+            entry = ttk.Entry(table, width=24)
+            entry.grid(row=row, column=2, padx=6, sticky="ew")
+            entry.bind("<FocusIn>", self.show_focused_input)
+            self.inputs.append(entry)
+
+        self.error = ttk.Label(self, foreground="#9a3412", wraplength=650, padding=(14, 4))
+        self.error.pack(fill="x")
+        self.wait_visibility()
+        self.grab_set()
+        self.inputs[0].focus_set()
+
+    def show_focused_input(self, event):
+        bounds = self.canvas.bbox("all")
+        if not bounds:
+            return
+        top = event.widget.winfo_y()
+        bottom = top + event.widget.winfo_height()
+        visible_top = self.canvas.canvasy(0)
+        height = self.canvas.winfo_height()
+        if top < visible_top:
+            self.canvas.yview_moveto(top / bounds[3])
+        elif bottom > visible_top + height:
+            self.canvas.yview_moveto((bottom - height) / bounds[3])
+
+    def apply(self):
+        try:
+            self.repaired = fill_import_project(self.project, self.fields, [entry.get() for entry in self.inputs])
+        except (ValueError, ArithmeticError) as exc:
+            self.error.configure(text=str(exc))
+            return
+        self.destroy()
 
 
 class ParameterEditor(tk.Toplevel):
@@ -67,7 +133,8 @@ class ParameterEditor(tk.Toplevel):
                 ttk.Label(toolbar, text="勾選後自動更新灰底欄位，取消勾選可手動輸入。",
                           wraplength=400).pack(side="left")
             else:
-                ttk.Label(toolbar,text="車架扭轉 k 使用 N·m/rad；十個懸吊通道與四個輪胎通道可各別設定。",wraplength=640).pack(side="left",padx=10)
+                ttk.Label(toolbar,text="車架扭轉 k 使用 N·m/rad。直推與輪胎各有前、後軸設定，同軸左右輪共用每輪參數。",
+                          wraplength=640).pack(side="left",padx=10)
             if family == "quarter":
                 _, choices = PARAMETER_SOURCES[family]
                 corner = choices[self.sources[family]]
@@ -78,10 +145,10 @@ class ParameterEditor(tk.Toplevel):
             if family in ("LR", "FR"):
                 fields = {key: field for key, field in fields.items() if key != "zeta"}
             if family == "LR":
-                fields = {key: field for key, field in fields.items() if key not in ("kt", "ct")}
-                fields.update(LR_WHEEL_FIELDS)
-            channels=("heave_f","heave_r","roll_f","roll_r","roll_c","warp","corner_FL","corner_FR","corner_RL","corner_RR","tire_FL","tire_FR","tire_RL","tire_RR")
-            basic=[k for k in fields if not (family=="full" and any(k.startswith(n+"_") for n in channels))]
+                fields = {key: field for key, field in fields.items() if key not in ("k_right", "c_right")}
+                fields["k_left"] = ("前軸直推 k（每輪）", *fields["k_left"][1:])
+                fields["c_left"] = ("前軸直推 c（每輪）", *fields["c_left"][1:])
+            basic=[k for k in fields if not (family=="full" and k.rsplit("_", 1)[0] in FULL_CHANNEL_LABELS)]
             for i,key in enumerate(basic):
                 row,col=divmod(i,2)
                 label,unit,*_=fields[key]
@@ -102,8 +169,8 @@ class ParameterEditor(tk.Toplevel):
                 table=ttk.LabelFrame(frame,text="元件參數（元件端 k、c；MR 為彈簧／輪端）",padding=12);table.pack(fill="x",padx=10,pady=8)
                 for col,text in enumerate(("通道","k (N/m)","c (N·s/m)","MR")):
                     ttk.Label(table,text=text).grid(row=0,column=col,sticky="w",padx=8,pady=5)
-                for row,n in enumerate(channels,1):
-                    ttk.Label(table,text=n).grid(row=row,column=0,sticky="w",padx=8,pady=4)
+                for row,(n,label) in enumerate(FULL_CHANNEL_LABELS.items(),1):
+                    ttk.Label(table,text=label).grid(row=row,column=0,sticky="w",padx=8,pady=4)
                     for col,typ in enumerate(("k","c","mr"),1):
                         key=f"{n}_{typ}";var=tk.StringVar(value=f"{app.project['parameters'][family][key]:.12g}")
                         ttk.Entry(table,textvariable=var,width=20).grid(row=row,column=col,sticky="ew",padx=8,pady=4)
@@ -243,8 +310,7 @@ class ModelPanel(ttk.Frame):
             entry=ttk.Entry(row,textvariable=var,width=11);entry.pack(side="right",padx=(6,0))
             self.input_widgets[key]=entry
             var.trace_add("write",lambda *args:self.changed())
-        input_hint = ("ISO 路面依車速換算行駛距離，同一種子可重現同一條路面。"
-                      if family == "quarter" else "階躍不施加速度脈衝；隨機路面使用固定種子。")
+        input_hint = "階躍不施加速度脈衝。ISO 路面依車速換算行駛距離，隨機與 ISO 路面都可用種子重現。"
         ttk.Label(left,text=input_hint + "只有啟用的輸入欄位會影響該情境。",wraplength=270,padding=10,foreground="#64748b").pack(fill="x")
         buttons=ttk.Frame(left,padding=10);buttons.pack(fill="x")
         self.run_button=ttk.Button(buttons,text="計算此模型  F5",command=self.run);self.run_button.pack(fill="x",pady=2)
@@ -468,7 +534,7 @@ class ModelPanel(ttk.Frame):
             for key in LINKED_LOCAL_FIELDS[self.family]:
                 self.app.project['parameters'][self.family][key] = parameters[key]
         else:
-            self.app.project['parameters'][self.family] = copy.deepcopy(parameters)
+            self.app.project['parameters'][self.family] = migrate_parameters(self.family, copy.deepcopy(parameters))
         self.app.project['analysis'][self.family]=copy.deepcopy(self.result.project['analysis'][self.family])
         link_full_parameters(self.app.project)
         modes = self.app.project.get("auto_damping", {}).copy()
@@ -571,7 +637,8 @@ class ModelPanel(ttk.Frame):
 class App(tk.Tk):
     def __init__(self,project=None):
         super().__init__()
-        self.project=link_full_parameters(validate(copy.deepcopy(project or default_project())))
+        project = migrate_project_parameters(copy.deepcopy(project or default_project()))
+        self.project=link_full_parameters(validate(project))
         self.project_path=None;self.dirty=False;self.editor=None;self.busy=False
         self.events=queue.Queue();self.cancel_event=threading.Event();self.poll_timer=None
         self.title("Suspension Dynamics Lab · 懸吊模型分析")
@@ -586,8 +653,7 @@ class App(tk.Tk):
         ttk.Label(header,text="懸吊彈簧阻尼模型分析",padding=(14,0)).pack(side="left")
         toolbar=ttk.Frame(self,padding=(12,0,12,8));toolbar.pack(fill="x")
         for label, command in (
-            ("新增專案", self.new),
-            ("開啟專案", self.open),
+            ("匯入", self.open),
             ("儲存", self.save),
             ("另存", lambda: self.save(True)),
             ("車輛／彈簧阻尼設定", self.parameters),
@@ -638,21 +704,34 @@ class App(tk.Tk):
         return not self.dirty or messagebox.askyesno("尚未儲存","專案設定尚未儲存，確定要捨棄變更？",parent=self)
 
     def accept_project(self,project,path=None):
-        if self.busy:messagebox.showinfo("計算中","請先停止計算再切換專案。",parent=self);return
         self.project=link_full_parameters(project);self.project_path=path
         for family,panel in self.panels.items():panel.clear_results();panel.load_options(project["analysis"][family])
         if self.editor is not None and self.editor.winfo_exists():self.editor.destroy()
         self.dirty=False;self.update_title();self.status.set("專案已載入。按 F5 計算。")
 
-    def new(self):
-        if self.discard_ok():self.accept_project(default_project())
-
     def open(self):
         if not self.discard_ok():return
         path=filedialog.askopenfilename(parent=self,title="開啟懸吊動態專案",initialdir=ROOT/"projects",filetypes=[("專案 JSON","*.json")])
-        if not path:return
-        try:self.accept_project(load_project(path),Path(path))
-        except Exception as exc:messagebox.showerror("開啟失敗",str(exc),parent=self)
+        if path:
+            self.import_project(path)
+
+    def import_project(self, path):
+        if self.busy:
+            messagebox.showinfo("計算中", "請先停止計算再切換專案。", parent=self)
+            return
+        try:
+            project, missing = read_import_project(path)
+            if not missing:
+                self.accept_project(prepare_project(project), Path(path))
+                return
+            dialog = ImportRepairDialog(self, project, missing)
+            self.wait_window(dialog)
+            if dialog.repaired is not None:
+                self.accept_project(dialog.repaired)
+                self.mark_dirty()
+                self.status.set(f"已補齊 {len(missing)} 個缺失欄位並匯入。按 F5 計算，或另存修補後的專案。")
+        except Exception as exc:
+            messagebox.showerror("開啟失敗", str(exc), parent=self)
 
     def save(self,as_new=False):
         path=self.project_path
@@ -769,7 +848,15 @@ def main():
     parser.add_argument("--project",type=Path)
     parser.add_argument("--result",type=Path)
     args=parser.parse_args()
-    app=App(load_project(args.project) if args.project else None)
-    if args.project:app.project_path=args.project
-    if args.result:app.after(100,lambda:app.open_result(args.result))
+    app=App()
+
+    def open_startup_files():
+        if args.project:
+            app.import_project(args.project)
+        if args.result:
+            app.open_result(args.result)
+
+    if args.project or args.result:
+        app.wait_visibility()
+        app.after_idle(open_startup_files)
     app.mainloop()

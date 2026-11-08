@@ -14,7 +14,7 @@ from .project import static_objects, validate, travel_limits
 from .static.fv.wireframe_geometry import build_wireframe_scene
 from .wheel_end_geometry import rotation_matrix
 from . import hardpoints
-from .anti import axle_anti
+from .anti import anti_percentages, axle_anti
 
 COLORS = {"upper": "#fbbf24", "lower": "#38bdf8", "upright": "#a78bfa",
           "wheel": "#e2e8f0", "ground": "#64748b", "kingpin": "#fb7185", "force": "#34d399"}
@@ -339,12 +339,14 @@ class Engine:
             solver.travel_bounds = self.travel_bounds
         sv = self.scene.geometry["side_view"]
         self.sv = {"front": SVMotion(sv.front), "rear": SVMotion(sv.rear)}
+        self.static_anti_metrics = {}
         for axle, solver in self.sv.items():
             t = solver.template
-            values = axle_anti(axle, t.initial_ic, t.contact_point, t.wheel_center,
-                               self.car.l, self.car.h_cog, project["vehicle"]["brake_bias_front"],
+            values = axle_anti(axle, t.initial_ic, t.contact_point, self.car.l, self.car.h_cog,
+                               project["vehicle"]["brake_bias_front"],
                                project["vehicle"]["drive_force_front"])
-            self.derived_parameters[axle].update({key: values.get(key) for key in ("anti_dive", "anti_lift", "anti_squat")})
+            self.derived_parameters[axle].update(values)
+            self.static_anti_metrics.update(anti_percentages(axle, values))
             self.derived_parameters[axle]["svsa"] = (None if t.initial_ic is None else
                 float(t.direction_sign*(t.initial_ic[0]-t.contact_point[0])))
 
@@ -395,14 +397,14 @@ class Engine:
             t = self.sv[axle].template
             v = basis @ (s["kt"]-s["kg"])
             metrics[f"caster_{axle}_deg"] = t.direction_sign * math.degrees(math.atan2(v[0], v[1]))
-            values = axle_anti(axle, s["ic"], s["contact"], s["center"], wheelbase, cg_height,
+            values = axle_anti(axle, s["ic"], s["contact"], wheelbase, cg_height,
                                self.project["vehicle"]["brake_bias_front"], self.project["vehicle"]["drive_force_front"], basis)
-            metrics.update({f"{key}_{axle}_pct": None if value is None else 100*value for key, value in values.items()})
+            metrics.update(anti_percentages(axle, values))
             metrics[f"svsa_{axle}_mm"] = None if s["ic"] is None else float(t.direction_sign*(s["ic"][0]-s["contact"][0])*1000)
             for a, b, kind in (("au", "al", "upright"), ("kg", "kt", "kingpin")):
                 lines.append(line([s[a], s[b]], kind))
             if s["ic"] is not None:
-                for k in ("au", "al", "center", "contact"):
+                for k in ("au", "al", "contact"):
                     lines.append(line([s[k], s["ic"]], "force", True))
             angles = np.linspace(0, 2*math.pi, 49)
             circle = s["center"] + self.car.free_radius*np.column_stack((np.cos(angles), np.sin(angles)))

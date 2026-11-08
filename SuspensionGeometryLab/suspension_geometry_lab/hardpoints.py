@@ -13,7 +13,6 @@ from types import SimpleNamespace
 import numpy as np
 
 from .static.fv.wireframe_geometry import WireframeLine, WireframeScene
-from .anti import axle_anti
 
 CORNERS = ("FL", "FR", "RL", "RR")
 POINTS = {
@@ -161,9 +160,6 @@ def build_scene(project, car, suspension_f, suspension_r):
             kingpin_Au=sv_u, kingpin_Al=sv_l, kingpin_ground=local_sv(ground), kingpin_top=local_sv(top),
             wheel_center=local_sv(wc), contact_point=local_sv(contact), initial_ic=sv_ic,
             direction_sign=sign, suspension=suspension, motion_directions=directions)
-        sv_contact = local_sv(contact)
-        anti = axle_anti(axle, sv_ic, sv_contact, local_sv(wc), car.l, car.h_cog,
-                         project["vehicle"]["brake_bias_front"], project["vehicle"]["drive_force_front"])
         derived[axle] = {
             "kpi_deg": math.degrees(math.atan2(axis[1], axis[2])),
             "caster_deg": math.degrees(math.atan2(-sign * axis[0], axis[2])),
@@ -173,8 +169,6 @@ def build_scene(project, car, suspension_f, suspension_r):
             "upper_mount_x": float(pivots["UCA"][0]), "lower_mount_x": float(pivots["LCA"][0]),
             "fvsa": None if ic is None else float(fv_contact[0] - ic[0]),
             "rc_height": None if rc is None else float(rc[1]),
-            "svsa": None if sv_ic is None else float(sign*(sv_ic[0] - sv_contact[0])),
-            **{key: anti.get(key) for key in ("anti_dive", "anti_lift", "anti_squat")},
         }
         for suffix in ("L", "R"):
             corner, p = prefix + suffix, points[prefix + suffix]

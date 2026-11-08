@@ -30,27 +30,50 @@ AXLE_FIELDS = {
     "upper_offset": ("Au 輪心上偏距", "m"), "lower_offset": ("Al 輪心下偏距", "m"),
     "lower_mount_x": ("下 A 臂車身 |Y|", "m"), "upper_mount_x": ("上 A 臂車身 |Y|", "m"),
     "caster_deg": ("Caster", "deg"), "mechanical_trail": ("Mechanical trail", "m"),
-    "anti_dive": ("前軸 Anti-dive（煞車）", "1=100%"),
-    "anti_lift": ("前軸 Anti-lift（加速）", "1=100%"),
+    "anti": ("軸端 Anti 比例（朝另一軸為正）", "1=100%"),
     "svsa": ("SVSA 水平長（有號）", "m"),
 }
-REAR_AXLE_FIELDS = {key: value for key, value in AXLE_FIELDS.items() if key not in ("anti_dive", "anti_lift")}
-REAR_AXLE_FIELDS["anti_lift"] = ("後軸 Anti-lift（煞車）", "1=100%")
-REAR_AXLE_FIELDS["anti_squat"] = ("後軸 Anti-squat（加速）", "1=100%")
 DERIVED_AXLE_FIELDS = {**AXLE_FIELDS,
-    "anti_lift": ("Anti-lift（前軸加速／後軸煞車）", "1=100%"),
-    "anti_squat": ("後軸 Anti-squat（加速）", "1=100%")}
+    "anti_brake": ("Anti（煞車加權）", "1=100%"),
+    "anti_drive": ("Anti（加速加權）", "1=100%")}
 ANALYSIS_FIELDS = {
     "bump_mm": ("懸吊上壓行程", "mm"), "droop_mm": ("懸吊下垂行程", "mm"),
     "steer_deg": ("轉向範圍 ±", "deg"),
     "caster_min_deg": ("Caster 掃描下限", "deg"), "caster_max_deg": ("Caster 掃描上限", "deg"),
     "samples": ("每軸網格點數", "5..51"),
 }
-FIELDS = {"vehicle": VEHICLE_FIELDS, "front": AXLE_FIELDS, "rear": REAR_AXLE_FIELDS, "analysis": ANALYSIS_FIELDS}
+FIELDS = {"vehicle": VEHICLE_FIELDS,
+          "front": {**AXLE_FIELDS, "anti": ("前軸 Anti 比例", "1=100%")},
+          "rear": {**AXLE_FIELDS, "anti": ("後軸 Anti 比例", "1=100%")}, "analysis": ANALYSIS_FIELDS}
+LEGACY_ANTI_KEYS = {"front": ("anti_dive", "anti_lift"), "rear": ("anti_lift", "anti_squat")}
 MOUNT_X_FIELDS = {
     "upper_front_x": "上 A 臂前面接點 X", "upper_rear_x": "上 A 臂後面接點 X",
     "lower_front_x": "下 A 臂前面接點 X", "lower_rear_x": "下 A 臂後面接點 X",
 }
+
+
+def parameter_fields(version):
+    """Return the parameter keys and labels stored by a project version."""
+    if version >= 6:
+        return FIELDS
+    fields = {group: values.copy() for group, values in FIELDS.items()}
+    for axle, legacy_keys in LEGACY_ANTI_KEYS.items():
+        del fields[axle]["anti"]
+        if version < 3:
+            keys = LEGACY_ANTI_KEYS["front"]
+        else:
+            keys = legacy_keys[:1] if version == 3 else legacy_keys
+        fields[axle].update(dict.fromkeys(keys, ("Anti", "1=100%")))
+        if version == 2:
+            del fields[axle]["svsa"]
+    if version < 3:
+        del fields["vehicle"]["drive_force_front"]
+    if version == 1:
+        analysis = fields["analysis"]
+        del analysis["bump_mm"], analysis["droop_mm"]
+        analysis.update(travel_mm=("對稱懸吊行程", "mm"), roll_deg=("舊版側傾範圍", "deg"),
+                        pitch_deg=("舊版俯仰範圍", "deg"))
+    return fields
 
 
 def mount_x_settings(project):
@@ -66,60 +89,22 @@ def travel_limits(project):
     return -float(project["analysis"]["droop_mm"]), float(project["analysis"]["bump_mm"])
 
 
-def drive_share(project, axle):
-    front = project["vehicle"]["drive_force_front"]
-    return front if axle == "front" else 1-front
-
-
-def drive_anti_key(axle):
-    return "anti_lift" if axle == "front" else "anti_squat"
-
-
-def is_derived_input(project, axle, key):
-    return ((key == "svsa" and drive_share(project, axle) > 0)
-            or (key == drive_anti_key(axle) and drive_share(project, axle) == 0))
-
-
-def _seed_drive_targets(project, car):
-    """Convert the previous SVSA-based geometry into equivalent drive targets."""
-    for index, axle in enumerate(("front", "rear")):
-        brake = project["vehicle"]["brake_bias_front"] if axle == "front" else 1-project["vehicle"]["brake_bias_front"]
-        target = project[axle]["anti_dive" if axle == "front" else "anti_lift"]
-        value = drive_share(project, axle)*(target/brake-car.l/car.h_cog*car.load_Radius[index]/project[axle]["svsa"])
-        project[axle][drive_anti_key(axle)] = 0. if abs(value) < 1e-14 else float(value)
-
-
-def _upgrade_v3(project):
-    result = copy.deepcopy(project)
-    for axle in ("front", "rear"):
-        expected = set(FIELDS[axle])-{drive_anti_key(axle)}
-        if not isinstance(result.get(axle), dict) or set(result[axle]) != expected:
-            raise ValueError(f"舊專案 {axle} 欄位不完整或含未知欄位。")
-        result[axle][drive_anti_key(axle)] = 0.
-    result["schema_version"] = 4
-    validate(result)
-    if any(abs(result[axle]["svsa"]) < 1e-8 for axle in ("front", "rear")):
-        raise ValueError("舊版 3 專案的 SVSA 水平長不可為 0。")
-    car, _, _ = static_objects(result)
-    _seed_drive_targets(result, car)
-    return result
+def _legacy_uses_svsa(project, axle):
+    version = project["schema_version"]
+    if version == 3:
+        return True
+    if version == 4:
+        return project["vehicle"]["drive_force_front"] == (0 if axle == "front" else 1)
+    return project.get("svsa_design", {}).get(axle, False)
 
 
 def _upgrade_legacy(project):
     """Preserve v1/v2 geometry while separating braking and drive definitions."""
     result = copy.deepcopy(project)
     version = result["schema_version"]
-    old_axle_keys = (set(AXLE_FIELDS)-{"svsa"}) | {"anti_lift"}
-    legacy = {
-        "vehicle": set(VEHICLE_FIELDS)-{"drive_force_front"},
-        "front": old_axle_keys | ({"svsa"} if version == 1 else set()),
-        "rear": old_axle_keys | ({"svsa"} if version == 1 else set()),
-        "analysis": ((set(ANALYSIS_FIELDS)-{"bump_mm", "droop_mm"}) | {"travel_mm", "roll_deg", "pitch_deg"}
-                     if version == 1 else set(ANALYSIS_FIELDS)),
-    }
-    for group, keys in legacy.items():
+    for group, fields in parameter_fields(version).items():
         values = result.get(group)
-        if not isinstance(values, dict) or set(values) != keys:
+        if not isinstance(values, dict) or set(values) != set(fields):
             raise ValueError(f"舊專案 {group} 欄位不完整或含未知欄位。")
         if any(type(value) not in (float, int) or not math.isfinite(value) for value in values.values()):
             raise ValueError(f"舊專案 {group} 必須是有限數值。")
@@ -133,13 +118,12 @@ def _upgrade_legacy(project):
         a.pop("pitch_deg")
     old_anti = {axle: (result[axle].pop("anti_dive"), result[axle].pop("anti_lift")) for axle in ("front", "rear")}
     result["vehicle"]["drive_force_front"] = 0.
-    result["schema_version"] = 4
-    for axle, key in (("front", "anti_dive"), ("rear", "anti_lift")):
+    result["schema_version"] = 3
+    for axle, (key, _) in LEGACY_ANTI_KEYS.items():
         result[axle].update(svsa=1., **{key: old_anti[axle][0]})
-        result[axle][drive_anti_key(axle)] = 0.
     # Validate physical inputs before using them in the migration arithmetic.
-    validate(result)
-    car, _, _ = static_objects(result)
+    _validate_parameters(result)
+    car = _static_car(result["vehicle"])
     b = result["vehicle"]["brake_bias_front"]
     for index, axle in enumerate(("front", "rear")):
         dive, lift = old_anti[axle]
@@ -150,36 +134,94 @@ def _upgrade_legacy(project):
         result[axle]["svsa"] = float(lengths[axle] or car.load_Radius[index]/denominator)
         if axle == "rear":
             result[axle]["anti_lift"] = dive*(1-b)/b
-    _seed_drive_targets(result, car)
     return result
+
+
+def _upgrade_contact_anti(project):
+    """Preserve the old CP line and horizontal IC distance in the new design."""
+    version = project["schema_version"]
+    result = copy.deepcopy(project)
+    vehicle = result["vehicle"]
+    car = _static_car(vehicle)
+    for index, (axle, (brake_key, drive_key)) in enumerate(LEGACY_ANTI_KEYS.items()):
+        design = result[axle]
+        brake_anti = design.pop(brake_key)
+        drive_anti = design.pop(drive_key, None)
+        if version < 5:
+            front_brake = vehicle["brake_bias_front"]
+            brake_anti /= front_brake if axle == "front" else 1-front_brake
+        if not _legacy_uses_svsa(project, axle):
+            if version == 4:
+                front_drive = vehicle["drive_force_front"]
+                drive_anti /= front_drive if axle == "front" else 1-front_drive
+            slope_scale = car.h_cog / car.l
+            brake_slope = brake_anti * slope_scale
+            drive_slope = drive_anti * slope_scale
+            delta = brake_slope - drive_slope
+            if abs(delta) < 1e-12*max(1., abs(brake_slope), abs(drive_slope)):
+                if not project.get("hardpoints", {}).get("enabled"):
+                    raise ValueError(f"{axle}：舊專案的 Anti 力線平行，無法換算有限 SVSA。")
+                # The unused parameter draft may be degenerate in a valid hardpoint project.
+                if not FIELD_LIMITS[axle]["svsa"].accepts(design["svsa"]):
+                    design["svsa"] = default_project()[axle]["svsa"]
+            else:
+                design["svsa"] = float(car.load_Radius[index] / delta)
+        design["anti"] = brake_anti
+    result.pop("svsa_design", None)
+    result["schema_version"] = 7
+    return result
+
+
+def project_version(project):
+    version = project.get("schema_version") if isinstance(project, dict) else None
+    if type(version) is not int or not 1 <= version <= 7:
+        raise ValueError("不支援的專案版本；目前為 schema_version=7，可讀取舊版 1～6。")
+    return version
 
 
 def validate(project):
     """Strict schema validation; no silent fallback to car.py or ignored keys."""
     required = {"schema_version", "name", *FIELDS}
-    if not isinstance(project, dict) or not required <= set(project) or set(project) - required - {"hardpoints", "arm_mount_x"}:
+    if not isinstance(project, dict) or not required <= set(project) or set(project) - required - {"hardpoints", "arm_mount_x", "svsa_design"}:
         raise ValueError("需要 SuspensionGeometryLab 專案（schema_version、name、vehicle、front、rear、analysis）。")
-    if type(project["schema_version"]) is not int or project["schema_version"] not in (1, 2, 3, 4):
-        raise ValueError("不支援的專案版本；目前為 schema_version=4，可讀取舊版 1／2／3。")
-    if project["schema_version"] < 3:
+    version = project_version(project)
+    if version < 3:
         project = _upgrade_legacy(project)
-    elif project["schema_version"] == 3:
-        project = _upgrade_v3(project)
+    if project["schema_version"] < 6:
+        _validate_parameters(project)
+        project = _upgrade_contact_anti(project)
+    elif project["schema_version"] == 6:
+        # Only v6 stored a forward-positive design ratio for both axles.
+        project = copy.deepcopy(_validate_parameters(project))
+        project["front"]["anti"] *= -1
+        project["schema_version"] = 7
+    return _validate_parameters(project)
+
+
+def _validate_parameters(project):
+    version = project["schema_version"]
+    if "svsa_design" in project:
+        modes = project["svsa_design"]
+        if version != 5 or not isinstance(modes, dict) or set(modes) != {"front", "rear"} or any(type(x) is not bool for x in modes.values()):
+            raise ValueError("svsa_design 只適用於版本 5，且需要前後軸各一個布林值。")
     if (not isinstance(project["name"], str) or not project["name"].strip()
             or len(project["name"]) > NAME_MAX_LENGTH):
         raise ValueError(f"專案名稱須為 1..{NAME_MAX_LENGTH} 個字元，且不可全為空白。")
-    for group, fields in FIELDS.items():
+    for group, fields in parameter_fields(version).items():
+        legacy_keys = LEGACY_ANTI_KEYS.get(group, ()) if version < 6 else ()
         values = project[group]
         if not isinstance(values, dict) or set(values) != set(fields):
             raise ValueError(f"{group} 欄位不完整或含未知欄位。")
         for key, value in values.items():
             if type(value) not in (float, int) or not math.isfinite(value):
                 raise ValueError(f"{group}.{key} 必須是有限數值。")
-            # Inactive stored values are not editable inputs. In particular,
-            # a driven axle's SVSA is a result and may legitimately be large.
-            if group in ("front", "rear") and is_derived_input(project, group, key):
-                continue
-            limit = FIELD_LIMITS[group][key]
+            if legacy_keys:
+                uses_length = _legacy_uses_svsa(project, group)
+                if (key == "svsa" and not uses_length) or (key == legacy_keys[1] and uses_length):
+                    continue
+                if version < 5 and key in legacy_keys and not -2 <= value <= 3:
+                    raise ValueError(f"舊專案 {group}.{key} 必須介於 -2 與 3。")
+            limit = FIELD_LIMITS[group]["anti" if key in legacy_keys else key]
             if not limit.accepts(value):
                 label, unit = fields[key]
                 raise ValueError(f"{group} · {label} 允許範圍：{limit.describe(unit)}。")
@@ -188,8 +230,10 @@ def validate(project):
                 "free_radius", "tire_stiffness", "tire_width", "rim_inner_diameter"):
         if v[key] <= 0:
             raise ValueError(f"{key} 必須大於 0。")
-    if not 0 < v["cg_to_front"] < v["wheelbase"] or not 0 < v["brake_bias_front"] < 1:
-        raise ValueError("重心必須在軸距內，前煞車比例必須介於 0 與 1。")
+    if not 0 < v["cg_to_front"] < v["wheelbase"]:
+        raise ValueError("重心必須在軸距內。")
+    if version < 5 and not 0 < v["brake_bias_front"] < 1:
+        raise ValueError("舊專案前煞車比例必須大於 0 且小於 1。")
     if not 0 <= v["drive_force_front"] <= 1:
         raise ValueError("前軸加速驅動力比例須為 0..1；0 為後驅、1 為前驅。")
     if min(v["ground_clearance"], v["rim_gap"]) < 0:
@@ -210,8 +254,6 @@ def validate(project):
         s = project[axle]
         if min(s[k] for k in ("fvsa", "upper_offset", "lower_offset")) <= 0:
             raise ValueError(f"{axle}: FVSA、Au、Al 必須大於 0。")
-        if drive_share(project, axle) == 0 and abs(s["svsa"]) < 1e-8:
-            raise ValueError(f"{axle}: SVSA 水平長不可為 0；正值朝另一軸，負值朝車外。")
         if min(s[k] for k in ("lower_mount_x", "upper_mount_x")) < 0:
             raise ValueError(f"{axle}: 車身接點 |Y| 不得為負。")
         if abs(s["kpi_deg"]) >= 85 or abs(s["caster_deg"]) >= 85:
@@ -246,8 +288,12 @@ def validate(project):
     return project
 
 
+def read_project(path):
+    return json.loads(Path(path).read_text(encoding="utf-8-sig"))
+
+
 def load_project(path):
-    return validate(json.loads(Path(path).read_text(encoding="utf-8-sig")))
+    return validate(read_project(path))
 
 
 def save_project(path, project):
@@ -262,10 +308,7 @@ def save_project(path, project):
             temporary.unlink()
 
 
-def static_objects(project):
-    """Use legacy types for isinstance dispatch, without running legacy defaults."""
-    project = validate(project)
-    v = project["vehicle"]
+def _static_car(v):
     car = Car.__new__(Car)
     aliases = {"l": "wheelbase", "lf": "cg_to_front", "tf": "track_front", "tr": "track_rear",
                "h_cog": "cg_height", "m": "mass", "bottom": "ground_clearance", "gravity": "gravity",
@@ -280,6 +323,13 @@ def static_objects(project):
     car.steer = v["clearance_steer_deg"]
     if min(car.load_Radius) <= 0:
         raise ValueError("輪胎負載半徑小於等於 0；檢查質量與輪胎剛性。")
+    return car
+
+
+def static_objects(project):
+    """Use legacy types for isinstance dispatch, without running legacy defaults."""
+    project = validate(project)
+    car = _static_car(project["vehicle"])
     result = []
     for cls, axle in ((SuspensionF, "front"), (SuspensionR, "rear")):
         s = project[axle]
@@ -287,13 +337,9 @@ def static_objects(project):
         mapping = {"h_RC": "rc_height", "fvsa": "fvsa", "scrub_radius": "scrub_radius", "Au": "upper_offset",
                    "Al": "lower_offset", "lower_mount_x": "lower_mount_x", "upper_mount_x": "upper_mount_x",
                    "mechanical_trail_sv": "mechanical_trail", "caster_sv_deg": "caster_deg",
-                   "svsa": "svsa"}
+                   "svsa": "svsa", "target_anti_sv": "anti"}
         for target, source in mapping.items():
             setattr(obj, target, s[source])
         obj.kpi = math.radians(s["kpi_deg"])
-        obj.front_brake_bias_sv = v["brake_bias_front"]
-        obj.target_braking_anti_sv = s["anti_dive" if axle == "front" else "anti_lift"]
-        obj.drive_force_share_sv = drive_share(project, axle)
-        obj.target_drive_anti_sv = s[drive_anti_key(axle)]
         result.append(obj)
     return car, *result

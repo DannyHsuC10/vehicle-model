@@ -8,12 +8,24 @@ import unittest
 import numpy as np
 
 from suspension_dynamics.project import default_project, save_project, load_project, estimate_damping, parameters_for_analysis
-from suspension_dynamics.engine import simulate
+from suspension_dynamics.engine import simulate, steady_response
+from suspension_dynamics.project_import import read_import_project
 from suspension_dynamics.storage import save_result, load_result, write_csv, write_report, import_legacy, fingerprint
 from suspension_dynamics.charts import envelope
 
 
 class StorageTests(unittest.TestCase):
+    @staticmethod
+    def legacy_wheel_parameters(full):
+        full = full.copy()
+        for component in ('corner', 'tire'):
+            for axle in ('f', 'r'):
+                for kind in ('k', 'c', 'mr'):
+                    value = full.pop(f'{component}_{axle}_{kind}')
+                    for side in ('L', 'R'):
+                        full[f'{component}_{axle.upper()}{side}_{kind}'] = value
+        return full
+
     def setUp(self):
         self.temp_base=Path(__file__).resolve().parents[1]/'.test-tmp';self.temp_base.mkdir(exist_ok=True)
         self.temp=tempfile.TemporaryDirectory(dir=self.temp_base);self.root=Path(self.temp.name)
@@ -64,6 +76,9 @@ class StorageTests(unittest.TestCase):
         saved = json.loads(path.read_text(encoding="utf-8"))
         self.assertNotIn("analysis", saved)
         self.assertEqual(set(saved["parameters"]), {"full"})
+        wheel_keys = {key for key in saved["parameters"]["full"] if key.startswith(("corner_", "tire_"))}
+        self.assertEqual(wheel_keys, {f"{component}_{axle}_{kind}" for component in ("corner", "tire")
+                                      for axle in ("f", "r") for kind in ("k", "c", "mr")})
         loaded_project = load_project(path)
         self.assertEqual(loaded_project["parameters"]["full"], project["parameters"]["full"])
         self.assertEqual(loaded_project["parameters"]["LR"], project["parameters"]["LR"])
@@ -80,17 +95,28 @@ class StorageTests(unittest.TestCase):
 
     def test_sizing_export_derives_quarter_from_main_and_tender(self):
         project = default_project()
-        full = project["parameters"]["full"] | dict(
-            heave_f_k=20_000, roll_f_k=60_000, corner_FL_mr=.8, zeta=.65,
+        full = self.legacy_wheel_parameters(project["parameters"]["full"]) | dict(
+            heave_f_k=20_000, roll_f_k=60_000, corner_FL_mr=.75, corner_FR_mr=.85, zeta=.65,
+            tire_FL_k=70_000., tire_FR_k=90_000., tire_RL_c=None, tire_RR_c=440.,
             tender_enabled=True, tender_stiffness_N_per_m=80_000,
             k_frame=900_000, c_frame=125, m_frame=50,
+            dive_front=.2, lift_front=.15, squat_rear=.05, lift_rear=.4,
+            drive_front=.5, brake_front=.75,
         )
+        del full["anti_front"], full["anti_rear"]
         path = self.root / "initial_settings.json"
         path.write_text(json.dumps({
             "application": "VehicleInitialSizingLab-DynamicsExport", "schema_version": 1,
             "name": "Sizing", "parameters": {"full": full},
         }), encoding="utf-8")
+        _, missing = read_import_project(path)
+        self.assertEqual(missing, [])
         loaded = load_project(path)
+        self.assertEqual(loaded["parameters"]["full"]["anti_front"], .2)
+        self.assertEqual(loaded["parameters"]["full"]["anti_rear"], .4)
+        self.assertNotIn("brake_front", loaded["parameters"]["full"])
+        self.assertEqual(loaded["parameters"]["full"]["tire_f_k"], 80_000.)
+        self.assertEqual(loaded["parameters"]["full"]["tire_r_c"], 440.)
         quarter = parameters_for_analysis(loaded, "quarter")
         self.assertEqual(quarter["ks"], 25_000)
         self.assertEqual(quarter["mr"], .8)
@@ -99,6 +125,16 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(loaded["parameters"]["LR"], dict(k_frame=900_000, c_frame=125, m_frame=50))
         save_project(path, loaded)
         self.assertEqual(load_project(path), loaded)
+
+    def test_archived_results_keep_the_original_wheel_parameters(self):
+        result = copy.deepcopy(self.result)
+        full = self.legacy_wheel_parameters(result.project["parameters"]["full"])
+        result.project["parameters"]["full"] = full
+        path = self.root / "four-corner.npz"
+        save_result(path, result)
+        loaded = load_result(path)
+        self.assertEqual(loaded.project, result.project)
+        self.assertEqual(steady_response(loaded), steady_response(self.result))
 
     def test_legacy_half_car_import_has_geometry_for_playback(self):
         path = self.root/'half.pkl'

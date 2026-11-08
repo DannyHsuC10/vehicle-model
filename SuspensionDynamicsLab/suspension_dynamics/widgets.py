@@ -16,7 +16,7 @@ class ScrollFrame(ttk.Frame):
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         self.canvas = canvas
-        self.bind_all("<MouseWheel>",self._wheel,add="+")
+        self.winfo_toplevel().bind("<MouseWheel>", self._wheel, add="+")
 
     def _wheel(self,event):
         try:

@@ -1,13 +1,15 @@
 import copy
+import json
 from pathlib import Path
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from tkinter import ttk
 
 import numpy as np
 
-from suspension_dynamics.catalog import MODELS, SCENARIOS
+from suspension_dynamics.catalog import MODELS, SCENARIOS, TARGETS
 from suspension_dynamics.dashboard import FullVehicleDashboard
 from suspension_dynamics.engine import simulate
 from suspension_dynamics.gui import App, MODEL_NAMES
@@ -97,6 +99,54 @@ class NativeWorkbenchTests(unittest.TestCase):
         self.assertTrue(self.app.dirty)
         self.assertIn('快照',panel.result_status.get())
 
+    def test_import_repairs_only_missing_fields_and_allows_cancel_or_retry(self):
+        source = default_project()
+        full = source['parameters']['full']
+        del full['m']
+        full.update(tf=None, tr='  ', lf=.8, body_twist_c=0, zeta=.65,
+                    **source['parameters']['LR'])
+        source.update(application='VehicleInitialSizingLab-DynamicsExport', parameters={'full': full})
+        original = self.app.project
+        base = Path(__file__).resolve().parents[1] / '.test-tmp'
+        base.mkdir(exist_ok=True)
+
+        def fill(dialog):
+            fields = {field.location: (field.default, entry)
+                      for field, entry in zip(dialog.fields, dialog.inputs, strict=True)}
+            self.assertEqual({path: default for path, (default, _) in fields.items()},
+                             {'parameters.full.m': 321., 'parameters.full.tf': 1.28,
+                              'parameters.full.tr': 1.24})
+            entry = fields['parameters.full.m'][1]
+            entry.insert(0, '1')
+            dialog.apply()
+            self.assertTrue(dialog.winfo_exists())
+            self.assertIn('總質量', dialog.error.cget('text'))
+            self.assertIs(self.app.project, original)
+            entry.delete(0, 'end')
+            entry.insert(0, '340')
+            dialog.apply()
+
+        with tempfile.TemporaryDirectory(dir=base) as temp:
+            path = Path(temp) / 'incomplete.json'
+            contents = json.dumps(source)
+            path.write_text(contents, encoding='utf-8')
+            with (patch('suspension_dynamics.gui.filedialog.askopenfilename', return_value=str(path)),
+                  patch('suspension_dynamics.gui.messagebox.showerror') as show_error):
+                with patch.object(self.app, 'wait_window', side_effect=lambda dialog: dialog.destroy()):
+                    self.app.open()
+                self.assertIs(self.app.project, original)
+                with patch.object(self.app, 'wait_window', side_effect=fill) as wait:
+                    self.app.open()
+                    wait.assert_called_once()
+                show_error.assert_not_called()
+            self.assertEqual(path.read_text(encoding='utf-8'), contents)
+
+        repaired = self.app.project['parameters']['full']
+        self.assertEqual([repaired[key] for key in ('m', 'tf', 'tr', 'lf', 'body_twist_c')],
+                         [340., 1.28, 1.24, .8, 0])
+        self.assertTrue(self.app.dirty)
+        self.assertIsNone(self.app.project_path)
+
     def test_half_car_preview_and_analysis_follow_full_settings_and_axle_choice(self):
         panel = self.app.panels['FR']
         self.app.book.select(panel)
@@ -107,11 +157,22 @@ class NativeWorkbenchTests(unittest.TestCase):
         self.app.update()
         editor = self.app.editor
         self.assertNotIn('FR', editor.auto_damping)
+        wheel_fields = {key for family, key in editor.entries if family == 'full'
+                        and key.startswith(('corner_', 'tire_'))}
+        self.assertEqual(wheel_fields, {f'{component}_{axle}_{kind}'
+                         for component in ('corner', 'tire') for axle in ('f', 'r') for kind in ('k', 'c', 'mr')})
         editor.entries['full', 'heave_r_k'].set('42000')
         editor.entries['full', 'tf'].set('1.4')
+        editor.entries['full', 'tire_f_k'].set('90000')
+        editor.entries['full', 'tire_r_k'].set('110000')
+        editor.entries['full', 'corner_f_k'].set('2500')
         self.assertEqual(editor.entries['FR', 'k_heave_f'].get(), '84000')
         self.assertEqual(editor.entries['FR', 'k_heave_r'].get(), '84000')
         self.assertEqual(editor.entries['LR', 'track'].get(), '1.4')
+        self.assertEqual(editor.entries['LR', 'kt'].get(), '90000')
+        self.assertEqual(editor.entries['LR', 'k_left'].get(), '2500')
+        self.assertNotIn(('LR', 'k_right'), editor.entries)
+        self.assertEqual(editor.entries['FR', 'kt'].get(), '110000')
         editor.apply()
         panel.run()
         self.pump(lambda: not self.app.busy)
@@ -229,7 +290,6 @@ class NativeWorkbenchTests(unittest.TestCase):
         choices = panel.scenario_combo.cget('values')
         for key in ('random', 'iso_a', 'iso_b', 'iso_c'):
             self.assertIn(SCENARIOS[key], choices)
-        self.assertNotIn(SCENARIOS['iso_c'], self.app.panels['LR'].scenario_combo.cget('values'))
         panel.scenario.set(SCENARIOS['iso_c'])
         panel.scenario_combo.event_generate('<<ComboboxSelected>>')
         self.app.update()
@@ -251,6 +311,38 @@ class NativeWorkbenchTests(unittest.TestCase):
         offsets = (road[:, 0] - wheel_x) / (20. * motion.pixels_per_metre)
         expected = np.interp(result.time[45] + offsets, result.time, result.signals['Road Q'])
         np.testing.assert_allclose(road[:, 1], datum_y - expected * motion.pixels_per_metre / 1000)
+
+    def test_half_and_full_vehicle_iso_road_runs_on_selected_wheels(self):
+        cases = (('LR', 'iso_a', 'right', 'Road R'), ('FR', 'iso_b', 'rear', 'Road R'),
+                 ('full', 'iso_c', 'RR', 'Road RR'))
+        for family, scenario, target, road_signal in cases:
+            with self.subTest(family=family):
+                panel = self.app.panels[family]
+                self.app.book.select(panel)
+                self.app.update()
+                for key in ('iso_a', 'iso_b', 'iso_c'):
+                    self.assertIn(SCENARIOS[key], panel.scenario_combo.cget('values'))
+                panel.scenario.set(SCENARIOS[scenario])
+                panel.scenario_combo.event_generate('<<ComboboxSelected>>')
+                self.app.update()
+                self.assertTrue(panel.target_combo.instate(['readonly']))
+                for key in ('speed', 'seed'):
+                    self.assertFalse(panel.input_widgets[key].instate(['disabled']))
+                for key in ('height', 'frequency', 'random_interval'):
+                    self.assertTrue(panel.input_widgets[key].instate(['disabled']))
+                panel.target.set(TARGETS[target])
+                panel.vars['speed'].set('20')
+                panel.vars['seed'].set('32')
+                panel.run()
+                self.pump(lambda: not self.app.busy)
+                result = panel.result
+                self.assertEqual(result.info['iso_road']['class'], scenario[-1].upper())
+                self.assertEqual(result.info['iso_road']['speed_m_per_s'], 20.)
+                self.assertEqual(result.project['analysis'][family]['seed'], 32)
+                self.assertGreater(np.max(np.abs(result.signals[road_signal])), 0.)
+                for name, values in result.signals.items():
+                    if name.startswith('Road ') and name != road_signal:
+                        np.testing.assert_array_equal(values, 0.)
 
     def test_plot_svg_and_png_and_all_channels_are_exportable(self):
         panel=self.app.panels['full'];panel.add_result(simulate(self.project,'full'));self.app.book.select(panel);self.app.update()

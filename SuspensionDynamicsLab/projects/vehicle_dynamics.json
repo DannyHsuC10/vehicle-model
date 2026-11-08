@@ -1,7 +1,7 @@
 {
   "application": "VehicleInitialSizingLab-DynamicsExport",
   "schema_version": 1,
-  "name": "LP03",
+  "name": "車輛初步設計",
   "parameters": {
     "full": {
       "m": 320.0,
@@ -20,8 +20,6 @@
       "lift_rear": 0.0943798655466936,
       "drive_front": 0.5,
       "brake_front": 0.7530556371361202,
-      "body_twist_k": 180000.0,
-      "body_twist_c": 300.0,
       "mu_f": 13.0,
       "mu_r": 13.0,
       "heave_f_k": 18974.983348595713,
@@ -67,12 +65,33 @@
       "tire_RR_c": 1427.7254638059796,
       "tire_RR_mr": 1,
       "zeta": 0.7,
-      "k_frame": 1000000.0,
-      "c_frame": 150.0,
-      "m_frame": 65.0,
+      "k_frame": 636283.0341215229,
+      "m_frame": 67.0,
       "tender_enabled": true,
       "tender_stiffness_N_per_m": 124195.07143003517,
       "heave_configuration": "main_spring"
+    }
+  },
+  "geometry": {
+    "vehicle": {
+      "gravity": 9.81,
+      "free_radius": 0.2,
+      "clearance_steer_deg": 80.17370738134966
+    },
+    "front": {
+      "fvsa": 0.9720432720386547,
+      "kpi_deg": 8.0,
+      "caster_deg": 6.235542726033153
+    },
+    "rear": {
+      "fvsa": 0.9720432720386547,
+      "kpi_deg": 8.0,
+      "caster_deg": 0.0
+    },
+    "analysis": {
+      "bump_mm": 25.0,
+      "droop_mm": 25.0,
+      "steer_deg": 80.17370738134966
     }
   }
 }

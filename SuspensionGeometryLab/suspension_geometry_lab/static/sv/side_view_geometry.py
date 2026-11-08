@@ -15,7 +15,6 @@ STYLE = {
     "svsa": "black",
     "ic_links": "tab:orange",
     "tangent_lines": "tab:purple",
-    "anti_lift": "tab:green",
     "hard_points": "tab:blue",
     "contact": "tab:red",
     "ic": "tab:green",
@@ -27,12 +26,6 @@ car = Car()
 suspension_f = SuspensionF()
 suspension_r = SuspensionR()
 analysis_settings = AnalysisSettings()
-
-
-def calc_anti_angle(anti_percent, axle_brake_bias, cg_height, wheelbase):
-    """Convert an anti percentage and axle brake share to a side-view angle."""
-    tangent = anti_percent * cg_height / (axle_brake_bias * wheelbase)
-    return np.arctan(tangent)
 
 
 class SideSuspension:
@@ -54,26 +47,15 @@ class SideSuspension:
             [center_x, self.car.load_Radius[axle_index]], dtype=float
         )
 
-        braking_angle = calc_anti_angle(
-            suspension.target_braking_anti_sv,
-            suspension.front_brake_bias_sv if axle_index == 0 else 1-suspension.front_brake_bias_sv,
-            self.car.h_cog,
-            self.car.l,
-        )
-        brake_slope = np.tan(braking_angle)
-        if suspension.drive_force_share_sv > 0:
-            drive_slope = suspension.target_drive_anti_sv*self.car.h_cog/(suspension.drive_force_share_sv*self.car.l)
-            denominator = brake_slope-drive_slope
-            if abs(denominator) < 1e-12*max(1., abs(brake_slope), abs(drive_slope)):
-                raise ValueError(f"{name}：煞車與加速 Anti 力線平行，沒有有限瞬心；請調整 Anti 目標。")
-            offset = self.wheel_center-self.contact_point
-            distance = (offset[1]-drive_slope*direction_sign*offset[0])/denominator
-        else:
-            distance = suspension.svsa
+        distance = suspension.svsa
         if not np.isfinite(distance) or abs(distance) < 1e-8:
             raise ValueError(f"{name}：Anti 設定無法產生有效的有限 SVSA。")
-        self.initial_ic = self.contact_point + np.array(
-            [direction_sign*distance, distance*brake_slope])
+        rearward_distance = direction_sign * distance
+        inward_slope = suspension.target_anti_sv * (self.car.h_cog / self.car.l)
+        height = distance * inward_slope
+        if not np.isfinite(height):
+            raise ValueError(f"{name}：Anti 設定無法產生有限的瞬心高度。")
+        self.initial_ic = self.contact_point + np.array([rearward_distance, height])
 
         self.kingpin_ground = np.array(
             [center_x - direction_sign * suspension.mechanical_trail_sv, 0.0]
@@ -125,7 +107,6 @@ class SideSuspension:
         self.svsa_link = ge.Link(self.contact_pt, self.ic_pt, f"{name} SVSA")
         self.au_ic_link = ge.Link(self.au_pt, self.ic_pt, f"{name} Au to IC")
         self.al_ic_link = ge.Link(self.al_pt, self.ic_pt, f"{name} Al to IC")
-        self.anti_lift_link = ge.Link(self.wc_pt, self.ic_pt, f"{name} drive reference")
 
     def _point_on_kingpin(self, target_y):
         t = (target_y - self.kingpin_ground[1]) / self.kingpin_direction[1]
@@ -134,7 +115,10 @@ class SideSuspension:
     def _make_tangent_reference(self, point, label):
         """Draw a fixed tangent perpendicular to the point-to-IC reference."""
         radial = self.initial_ic - point.pos
-        radial /= np.linalg.norm(radial)
+        length = np.linalg.norm(radial)
+        if not np.isfinite(length) or length <= 1e-12:
+            raise ValueError(f"{self.name}：瞬心與 {point.name} 重合或無有限力線。")
+        radial /= length
         tangent = np.array([-radial[1], radial[0]])
         half_length = self.settings.side_view_tangent_half_length
         start = ge.Point(point.pos - half_length * tangent, f"{label} start")
@@ -155,7 +139,6 @@ class SideSuspension:
             (self.al_ic_link, {"color": STYLE["ic_links"], "linestyle": "--"}),
             (self.au_tangent, {"color": STYLE["tangent_lines"], "linestyle": "-."}),
             (self.al_tangent, {"color": STYLE["tangent_lines"], "linestyle": "-."}),
-            (self.anti_lift_link, {"color": STYLE["anti_lift"], "linestyle": ":"}),
         ):
             scene.add(link, **style)
 
@@ -200,8 +183,6 @@ def build_side_view_geometry(vehicle=None, suspension_f=None, suspension_r=None,
         rear.contact_point,
         rear.initial_ic,
     )
-    if pitch_center is None:
-        raise ValueError("Front and rear contact-to-IC lines do not define an initial PC.")
     return front, rear, pitch_center
 
 

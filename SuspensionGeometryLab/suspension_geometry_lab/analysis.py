@@ -5,6 +5,14 @@ from .engine import Unreachable, line
 from .project import travel_limits
 
 PAGES = {"front": "前 FV", "rear": "後 FV", "sv": "SV 側視", "we": "WE3D 輪端", "static": "靜態全車"}
+ANTI_RESULT_LABELS = {
+    "anti_front_pct": "前軸 Anti（%）",
+    "anti_rear_pct": "後軸 Anti（%）",
+    "anti_brake_front_pct": "前軸 Anti（煞車加權，%）",
+    "anti_brake_rear_pct": "後軸 Anti（煞車加權，%）",
+    "anti_drive_front_pct": "前軸 Anti（加速加權，%）",
+    "anti_drive_rear_pct": "後軸 Anti（加速加權，%）",
+}
 PLOTS = {
     "front": [("motion", "FV 機構動態"), ("rc_map", "Roll center 位置分布（x′–y′）"),
               ("rc_y_prime_mm", "RC 高度曲面（y′）"), ("rc_x_prime_mm", "RC 位置曲面（x′）"),
@@ -12,8 +20,8 @@ PLOTS = {
               ("camber_right_deg", "右輪 Camber 曲面"), ("camber_gain_left_deg_per_mm", "左輪 Camber gain 曲面"),
               ("camber_gain_right_deg_per_mm", "右輪 Camber gain 曲面")],
     "sv": [("motion", "SV 機構動態"), ("caster_front_deg", "前 Caster 曲面"), ("caster_rear_deg", "後 Caster 曲面"),
-           ("anti_dive_front_pct", "前 Anti-dive（煞車）曲面"), ("anti_lift_rear_pct", "後 Anti-lift（煞車）曲面"),
-           ("anti_lift_front_pct", "前 Anti-lift（加速）曲面"), ("anti_squat_rear_pct", "後 Anti-squat（加速）曲面"),
+           *((key, label + "曲面") for key, label in ANTI_RESULT_LABELS.items()
+             if key.startswith(("anti_brake_", "anti_drive_"))),
            ("pc_y_prime_mm", "Pitch center 高度曲面（y′）"), ("pc_x_prime_mm", "Pitch center 位置曲面（x′）"),
            ("pc_map", "Pitch center 位置分布（x′–y′）")],
     "we": [("motion", "輪端 3D 轉向動態"), ("caster_surface", "Steering × Caster → 輪軸傾角曲面"),
@@ -26,9 +34,9 @@ PLOTS["rear"] = PLOTS["front"]
 NOTES = {
     "front": "動態圖使用接地座標：原點為兩接地點中點，x′ 左→右，y′ 垂直向上。CG 與車身接點一同轉換，隨升降／roll 移動。RC0 為車身零位參考；gain 為局部偏導 deg/mm。",
     "rear": "後軸使用獨立設計。動態圖與 RC 均使用當前接地座標；CG 與車身接點一同轉換。RC0 為車身零位參考，圖中隨車身姿態移動。",
-    "sv": "當前接地座標 x′ 前→後、y′ 向上，CG 隨姿態移動。輪端煞車：接地點→IC，前 Anti-dive／後 Anti-lift 使用煞車比例；加速：輪心→IC，前 Anti-lift／後 Anti-squat 使用獨立驅動力比例。未解輪胎極限與車身動力平衡。",
+    "sv": "Anti 輸入與結果的水平正向都朝另一軸。煞車與加速共用接地點→SVIC，結果依各軸的煞車或驅動力占比加權。",
     "we": "繞靜態全車主銷轉向；座標 X 前／Y 左／Z 上。接地點=負載半徑中心圓最低點，未解輪胎變形或頂升平衡；material 為原接地材料點。固定主銷 caster 不隨 steering 改變；曲面掃描不同設計 caster。",
-    "static": "完整靜態構造直接來自 StaticWireframe；X 前／Y 左／Z 上，單位 m。FV/SV 為參考平面，非 3D 懸吊連桿運動求解。",
+    "static": "靜態全車座標 X 前、Y 左、Z 上，單位 m。Anti 輸入與結果均以朝另一軸為水平正向，結果依各軸力占比加權。",
 }
 
 

@@ -19,6 +19,18 @@ COMMON = {
 }
 LINKED_LOCAL_FIELDS = {"quarter": ("zeta", "ks", "cs", "mr"), "LR": ("k_frame", "c_frame", "m_frame"), "FR": ()}
 SIZING_METADATA = ("tender_enabled", "tender_stiffness_N_per_m", "heave_configuration")
+MODAL_CHANNELS = ("heave_f", "heave_r", "roll_f", "roll_r", "roll_c", "warp")
+FULL_CHANNEL_LABELS = {name: name for name in MODAL_CHANNELS} | {
+    "corner_f": "前軸直推 corner_f",
+    "corner_r": "後軸直推 corner_r",
+    "tire_f": "前軸輪胎 tire_f",
+    "tire_r": "後軸輪胎 tire_r",
+}
+CHANNEL_UNITS = {"k": "N/m", "c": "N·s/m", "mr": "彈簧／輪端"}
+LEGACY_WHEEL_KEYS = {
+    f"{component}_{axle}_{kind}": tuple(f"{component}_{axle.upper()}{side}_{kind}" for side in "LR")
+    for component in ("corner", "tire") for axle in "fr" for kind in CHANNEL_UNITS
+}
 PARAMETER_SOURCES = {
     "quarter": ("parameter_corner", {corner: TARGETS[corner] for corner in CORNERS}),
     "LR": ("parameter_axle", {"front": "前軸參數"}),
@@ -31,6 +43,21 @@ LR_WHEEL_FIELDS = {
     f"{key}_{side}": field(f"{label} {name}", unit)
     for side, label in (("left", "左輪"), ("right", "右輪"))
     for key, name, unit in (("kt", "輪胎剛性", "N/m"), ("ct", "輪胎阻尼", "N·s/m"))
+}
+ANTI_FIELDS = {"anti_front": field("前軸 Anti 比例", "1=100%"),
+               "anti_rear": field("後軸 Anti 比例", "1=100%")}
+LEGACY_ANTI_KEYS = {
+    "full": {"anti_front": "dive_front", "anti_rear": "lift_rear"},
+    "FR": {"anti_front": "anti_dive_front", "anti_rear": "anti_squat_rear"},
+}
+LEGACY_ANTI_FIELDS = {
+    "full": {
+        "dive_front": field("前 Anti-dive", "1=100%"), "lift_front": field("前加速 Anti-lift", "1=100%"),
+        "squat_rear": field("後 Anti-squat", "1=100%"), "lift_rear": field("後煞車 Anti-lift", "1=100%"),
+        "drive_front": field("前軸驅動力比例", "0..1"), "brake_front": field("前軸煞車力比例", "0..1"),
+    },
+    "FR": {"anti_dive_front": field("前軸 Anti-dive", "1=100%"),
+           "anti_squat_rear": field("後軸 Anti-squat", "1=100%")},
 }
 FIELDS = {
     "quarter": {**COMMON, "kt": field("輪胎剛性 kt", "N/m"), "ks": field("彈簧剛性 ks", "N/m", positive=True),
@@ -50,7 +77,7 @@ FIELDS = {
     "FR": {**COMMON, "kt": field("輪胎剛性 kt", "N/m"),
            "lf": field("重心至前軸 lf", "m", positive=True), "lr": field("重心至後軸 lr", "m", positive=True),
            "Iy": field("半車俯仰慣量 Iy", "kg·m²", positive=True), "h_cg": field("重心高度", "m"),
-           "anti_dive_front": field("前軸 Anti-dive", "1=100%"), "anti_squat_rear": field("後軸 Anti-squat", "1=100%"),
+           **ANTI_FIELDS,
            "k_heave_f": field("front heave spring", "N/m"), "c_heave_f": field("front heave damper", "N·s/m"),
            "k_heave_r": field("rear heave spring", "N/m"), "c_heave_r": field("rear heave damper", "N·s/m"),
            **{f"{t}_{n}": field(f"{name} {t}", "N/m" if t == "k" else "N·s/m")
@@ -67,12 +94,15 @@ FIELDS = {
         "h_cg": field("等效慣性力高度", "m"), "Ixx": field("全車簧上側傾慣量", "kg·m²", positive=True),
         "Iyy": field("簧上俯仰慣量", "kg·m²", positive=True),
         "h_rc_f": field("前 RC 高度", "m", -10.), "h_rc_r": field("後 RC 高度", "m", -10.),
-        **{key: field(label, "1=100%") for key, label in (("dive_front", "前 Anti-dive"), ("lift_front", "前加速 Anti-lift"), ("squat_rear", "後 Anti-squat"), ("lift_rear", "後煞車 Anti-lift"))},
-        "drive_front": field("前軸驅動力比例", "0..1"), "brake_front": field("前軸煞車力比例", "0..1"),
+        **ANTI_FIELDS,
         "body_twist_k": field("車架扭轉剛性", "N·m/rad"), "body_twist_c": field("車架扭轉阻尼", "N·m·s/rad"),
-        **{f"{n}_{t}": field(f"{n} {t}", {"k": "N/m", "c": "N·s/m", "mr": "彈簧／輪端"}[t], positive=t == "mr")
-           for n in ("heave_f", "heave_r", "roll_f", "roll_r", "roll_c", "warp", "corner_FL", "corner_FR", "corner_RL", "corner_RR", "tire_FL", "tire_FR", "tire_RL", "tire_RR") for t in ("k", "c", "mr")},
+        **{f"{name}_{kind}": field(f"{label} {kind}", unit, positive=kind == "mr")
+           for name, label in FULL_CHANNEL_LABELS.items() for kind, unit in CHANNEL_UNITS.items()},
     },
+}
+LEGACY_WHEEL_FIELDS = {
+    old: (old, *FIELDS["full"][key][1:])
+    for key, old_keys in LEGACY_WHEEL_KEYS.items() for old in old_keys
 }
 ESTIMATED_DAMPING = {
     "quarter": ("cs",),
@@ -105,6 +135,52 @@ def link_full_parameters(project):
     return project
 
 
+def migrate_axle_anti(family, parameters):
+    legacy = LEGACY_ANTI_FIELDS.get(family)
+    if legacy is None or not isinstance(parameters, dict) or not legacy.keys() & parameters.keys():
+        return parameters
+    values = {key: value for key, value in parameters.items() if key not in legacy}
+    for key, old_key in LEGACY_ANTI_KEYS[family].items():
+        if old_key in parameters:
+            values.setdefault(key, parameters[old_key])
+    return values
+
+
+def migrate_parameters(family, parameters):
+    parameters = migrate_axle_anti(family, parameters)
+    if family != "full" or not isinstance(parameters, dict) or not LEGACY_WHEEL_FIELDS.keys() & parameters.keys():
+        return parameters
+    values = {key: value for key, value in parameters.items() if key not in LEGACY_WHEEL_FIELDS}
+    for key, old_keys in LEGACY_WHEEL_KEYS.items():
+        if not blank(values.get(key)):
+            continue
+        present = [parameters[old] for old in old_keys if not blank(parameters.get(old))]
+        if len(present) == 1:
+            values[key] = present[0]
+        elif len(present) == 2:
+            minimum, positive = FIELDS["full"][key][2:]
+            invalid = [v for v in present if not valid_field_value(v, minimum, positive)]
+            if invalid:
+                values[key] = invalid[0]  # Let validation report the invalid input.
+            else:
+                left, right = present
+                values[key] = left if left == right else left / 2 + right / 2
+    return values
+
+
+def blank(value):
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def migrate_project_parameters(project):
+    """Convert editable inputs while leaving archived result snapshots intact."""
+    groups = project.get("parameters") if isinstance(project, dict) else None
+    if not isinstance(groups, dict):
+        return project
+    return {**project, "parameters": {family: migrate_parameters(family, values)
+                                      for family, values in groups.items()}}
+
+
 def unsprung_masses(full):
     if "mu_f" in full:
         return {corner: full[f"mu_{corner[0].lower()}"] for corner in CORNERS}
@@ -123,6 +199,13 @@ def wheel_rates(full, channel):
     return full[f"{channel}_k"] * mr_squared, full[f"{channel}_c"] * mr_squared
 
 
+def corner_rates(full, component, corner):
+    channel = f"{component}_{corner[0].lower()}"
+    if f"{channel}_mr" not in full:  # Archived NPZ results can have different values for each wheel.
+        channel = f"{component}_{corner}"
+    return wheel_rates(full, channel)
+
+
 def parameters_for_analysis(project, family):
     """Reduce full-vehicle parameters to the selected wheel or half-car coordinates."""
     p = project["parameters"][family]
@@ -138,7 +221,7 @@ def parameters_for_analysis(project, family):
     sprung_mass, front_share, masses = full_mass_distribution(full)
     if family == "quarter":
         share = front_share if source.startswith("F") else 1 - front_share
-        kt, ct = wheel_rates(full, f"tire_{source}")
+        kt, ct = corner_rates(full, "tire", source)
         p.update(ms=sprung_mass * share / 2, mu=masses[source], kt=kt, ct=ct)
         if project.get("auto_damping", {}).get(family):
             p = estimate_damping(family, p)
@@ -147,8 +230,8 @@ def parameters_for_analysis(project, family):
     suffix = source[0]
     corners = (suffix.upper() + "L", suffix.upper() + "R")
     mu = [masses[corner] for corner in corners]
-    tire = [wheel_rates(full, f"tire_{corner}") for corner in corners]
-    direct = [wheel_rates(full, f"corner_{corner}") for corner in corners]
+    tire = [corner_rates(full, "tire", corner) for corner in corners]
+    direct = [corner_rates(full, "corner", corner) for corner in corners]
     heave = f"heave_{suffix}"
     p.update(h_cg=full["h_cg"], mu=sum(mu) / 2,
              kt=(tire[0][0] + tire[1][0]) / 2, ct=(tire[0][1] + tire[1][1]) / 2,
@@ -167,7 +250,7 @@ def parameters_for_analysis(project, family):
             p.update({f"kt_{side}": kt, f"ct_{side}": ct, f"k_{side}": ks, f"c_{side}": cs})
     else:
         p.update(ms=sprung_mass / 4, Iy=full["Iyy"] / 2, lf=full["lf"], lr=full["lr"],
-                 anti_dive_front=full["dive_front"], anti_squat_rear=full["squat_rear"])
+                 anti_front=full["anti_front"], anti_rear=full["anti_rear"])
         # In symmetric axle heave, each side carries half the full axle force.
         for end, index in (("front", "f"), ("rear", "r")):
             p[f"k_heave_{index}"] = 2 * full[f"{heave}_k"]
@@ -178,31 +261,46 @@ def parameters_for_analysis(project, family):
     return p
 
 
-def validate_parameters(family, parameters, *, linked=False):
+def parameter_fields(family, parameters, *, linked=False):
+    """Return the field definitions for the parameter layout indicated by its keys."""
     fields = FIELDS[family]
-    if isinstance(parameters, dict):
-        if linked and family in LINKED_LOCAL_FIELDS and parameters.keys() == set(LINKED_LOCAL_FIELDS[family]):
-            fields = {key: fields[key] for key in LINKED_LOCAL_FIELDS[family]}
-        if family in ("LR", "FR") and "zeta" not in parameters:
-            fields = {key: value for key, value in fields.items() if key != "zeta"}
-        if family == "LR":
-            for extra_fields in (LR_WHEEL_FIELDS, LEGACY_LR_MASS_FIELDS):
-                if extra_fields.keys() & parameters.keys():
-                    fields = fields | extra_fields
-        elif family == "full" and LEGACY_FULL_MASS_FIELDS.keys() & parameters.keys():
+    if linked and family in LINKED_LOCAL_FIELDS and parameters.keys() <= set(LINKED_LOCAL_FIELDS[family]):
+        return {key: fields[key] for key in LINKED_LOCAL_FIELDS[family]}
+    if family in ("LR", "FR") and "zeta" not in parameters:
+        fields = {key: value for key, value in fields.items() if key != "zeta"}
+    if family == "LR":
+        for extra_fields in (LR_WHEEL_FIELDS, LEGACY_LR_MASS_FIELDS):
+            if extra_fields.keys() & parameters.keys():
+                fields = fields | extra_fields
+    elif family == "full":
+        if LEGACY_FULL_MASS_FIELDS.keys() & parameters.keys():
             fields = {key: value for key, value in fields.items() if key not in ("mu_f", "mu_r")}
             fields.update(LEGACY_FULL_MASS_FIELDS)
-    if not isinstance(parameters, dict) or set(parameters) != set(fields):
+        if LEGACY_WHEEL_FIELDS.keys() & parameters.keys():
+            fields = {key: value for key, value in fields.items() if key not in LEGACY_WHEEL_KEYS} | LEGACY_WHEEL_FIELDS
+    legacy_anti = LEGACY_ANTI_FIELDS.get(family, {})
+    if legacy_anti.keys() & parameters.keys():
+        fields = {key: value for key, value in fields.items() if key not in ANTI_FIELDS} | legacy_anti
+    return fields
+
+
+def valid_field_value(value, minimum, positive):
+    return (not isinstance(value, bool) and isinstance(value, (float, int)) and math.isfinite(value)
+            and (value > minimum if positive else value >= minimum))
+
+
+def validate_parameters(family, parameters, *, linked=False):
+    fields = parameter_fields(family, parameters, linked=linked) if isinstance(parameters, dict) else None
+    if fields is None or parameters.keys() != fields.keys():
         raise ValueError(f"{FAMILIES[family]} 參數不完整或含未知欄位。")
     for key, (label, unit, minimum, positive) in fields.items():
         value = parameters[key]
-        if (isinstance(value, bool) or not isinstance(value, (float, int)) or not math.isfinite(value)
-                or (value <= minimum if positive else value < minimum)):
+        if not valid_field_value(value, minimum, positive):
             raise ValueError(f"{FAMILIES[family]} · {label} ({unit}) 必須為有限數，且 {'>' if positive else '≥'} {minimum:g}。")
     if family == "full":
         if parameters["m"] <= sum(unsprung_masses(parameters).values()):
             raise ValueError("整車總質量必須大於四個簧下質量之和。")
-        if parameters["drive_front"] > 1 or parameters["brake_front"] > 1:
+        if parameters.get("drive_front", 0) > 1 or parameters.get("brake_front", 0) > 1:
             raise ValueError("驅動／煞車前軸比例必須介於 0 與 1。")
 
 
@@ -257,11 +355,20 @@ def validate_options(family, opt):
     return opt
 
 
-def load_project(path):
+def read_project(path):
     project = json.loads(Path(path).read_text(encoding="utf-8-sig"))
     if (not isinstance(project, dict) or project.get("schema_version") != 1
             or project.get("application") not in ("SuspensionDynamicsLab", "VehicleInitialSizingLab-DynamicsExport")):
         raise ValueError("請開啟 SuspensionDynamicsLab 專案或 Initial Sizing 的全車參數 JSON。")
+    return migrate_project_parameters(project)
+
+
+def load_project(path):
+    return prepare_project(read_project(path))
+
+
+def prepare_project(project):
+    """Normalize and validate a freshly read project in place."""
     defaults = default_project()
     groups = project.get("parameters")
     project["analysis"] = defaults["analysis"]
@@ -293,7 +400,7 @@ def estimate_quarter_from_full(project, metadata):
     if enabled and tender is not None and heave > 0:
         heave = 1 / (1 / heave + 1 / tender)
     quarter = parameters_for_analysis(project, "quarter")
-    quarter.update(ks=(heave + full["roll_f_k"]) / 4, mr=full["corner_FL_mr"])
+    quarter.update(ks=(heave + full["roll_f_k"]) / 4, mr=full["corner_f_mr"])
     validate_parameters("quarter", quarter)
     quarter = estimate_damping("quarter", quarter)
     return {key: quarter[key] for key in LINKED_LOCAL_FIELDS["quarter"]}
@@ -308,6 +415,7 @@ def upgrade_project(project):
 
 
 def save_project(path, project):
+    project = migrate_project_parameters(project)
     validate(project)
     groups = project["parameters"]
     full = {**groups["full"], "zeta": groups["quarter"]["zeta"]}

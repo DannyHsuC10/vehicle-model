@@ -92,7 +92,7 @@ class HardpointTests(unittest.TestCase):
         self.assertAlmostEqual(d["mechanical_trail"], .002)
         self.assertIsNone(d["svsa"])
         sv = engine.solve_sv(10, 0)
-        self.assertIsNone(sv["metrics"]["anti_dive_front_pct"])
+        self.assertIsNone(sv["metrics"]["anti_brake_front_pct"])
         self.assertNotIn("PC0", sv["points"])
         self.assertAlmostEqual(sv["points"]["front_contact"][1], .01, places=8)
 
@@ -146,7 +146,7 @@ class HardpointTests(unittest.TestCase):
         xyz = np.array(p["hardpoints"]["corners"]["FR"]["UCA_F"]) + [.04, 0, .003]
         hardpoints.set_point(p["hardpoints"]["corners"], "FR", "UCA_F", xyz.tolist())
         engine = Engine(p)
-        self.assertNotAlmostEqual(engine.derived_parameters["front"]["anti_dive"], baseline.derived_parameters["front"]["anti_dive"])
+        self.assertNotAlmostEqual(engine.derived_parameters["front"]["anti"], baseline.derived_parameters["front"]["anti"])
         for page in ("front", "rear", "sv", "we"):
             mapping = calculate_mapping(engine, page)
             self.assertGreater(mapping["valid"], 0)

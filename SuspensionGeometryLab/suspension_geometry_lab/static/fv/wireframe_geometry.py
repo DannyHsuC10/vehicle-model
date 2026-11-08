@@ -109,7 +109,7 @@ class SideViewGeometry:
             vehicle=car, suspension_f=suspension_f, suspension_r=suspension_r,
             settings=settings,
         )
-        self.pitch_center = self.project(self.local_pitch_center)
+        self.pitch_center = None if self.local_pitch_center is None else self.project(self.local_pitch_center)
         self.ic_positions = {
             side.name: self.project(side.initial_ic) for side in (self.front, self.rear)
         }
@@ -233,7 +233,7 @@ def build_wireframe_scene(car=None, suspension_f=None, suspension_r=None, settin
                                    getattr(side, name)
                                    for side in (side_view.front, side_view.rear)
                                    for name in ("kingpin_link", "svsa_link", "au_ic_link", "al_ic_link",
-                                                "anti_lift_link", "au_tangent", "al_tangent")
+                                                "au_tangent", "al_tangent")
                                ])
     side_view.front.add_to_scene(collector)
     side_view.rear.add_to_scene(collector)

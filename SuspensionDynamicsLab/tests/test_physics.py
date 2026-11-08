@@ -51,9 +51,11 @@ class DynamicsTests(unittest.TestCase):
     def test_quarter_corner_matches_full_static_load_and_wheel_rates(self):
         full = self.p['parameters']['full']
         full.update(m=330., mu_f=13., mu_r=22., lf=.6, lr=.9,
-                    tire_FR_k=100000., tire_FR_c=240., tire_FR_mr=.8,
-                    tire_RL_k=110000., tire_RL_c=400., tire_RL_mr=1.2)
+                    tire_f_k=100000., tire_f_c=240., tire_f_mr=.8,
+                    tire_r_k=110000., tire_r_c=400., tire_r_mr=1.2)
         vehicle = assemble('full', 'flex', full)
+        np.testing.assert_allclose(vehicle.kt, [64000., 64000., 158400., 158400.])
+        np.testing.assert_allclose(vehicle.ct, [153.6, 153.6, 576., 576.])
         np.testing.assert_array_equal(vehicle.masses[-4:], [13., 13., 22., 22.])
         self.assertAlmostEqual(vehicle.masses[0], 260.)
         for index, corner in enumerate(vehicle.labels):
@@ -114,6 +116,27 @@ class DynamicsTests(unittest.TestCase):
     def test_iso_road_rejects_coarse_output_sampling(self):
         with self.assertRaisesRegex(ValueError, '輸出步長'):
             self.run_case('quarter', scenario='iso_c', speed=30., dt=.01)
+
+    def test_iso_road_rear_axle_samples_the_same_profile_after_wheelbase_delay(self):
+        for family in ('FR', 'full'):
+            with self.subTest(family=family):
+                options = dict(self.p['analysis'][family], scenario='iso_b', target='all',
+                               speed=20., start=.1, seed=32, rear_delay=True)
+                params = parameters_for_analysis(self.p, family)
+                system = assemble(family, options['model'], params)
+                rear_start = options['start'] + (params['lf'] + params['lr']) / options['speed']
+                axle_size = len(system.labels) // 2
+                delayed = Road(system, options)
+                simultaneous = Road(system, dict(options, rear_delay=False))
+                self.assertIn(rear_start, delayed.events)
+                for values in delayed.at(np.nextafter(rear_start, 0.))[:2]:
+                    np.testing.assert_array_equal(values[axle_size:], 0.)
+                for elapsed in (0., .047):
+                    expected = simultaneous.at(options['start'] + elapsed)[:2]
+                    actual = delayed.at(rear_start + elapsed)[:2]
+                    for value, reference in zip(actual, expected):
+                        np.testing.assert_allclose(value[axle_size:], reference[:axle_size], atol=1e-12)
+                        np.testing.assert_array_equal(reference[:axle_size], reference[axle_size:])
 
     def test_mass_and_virtual_work_for_full_vehicle(self):
         for model in ('rigid','flex'):
@@ -177,6 +200,24 @@ class DynamicsTests(unittest.TestCase):
         self.assertAlmostEqual(moment,p['m']*2*p['h_cg'],delta=.1)
         self.assertAlmostEqual(sum(loads),0,delta=.05)
 
+    def test_axle_anti_scales_signed_acceleration_independently(self):
+        full = self.p['parameters']['full']
+        full.update(lf=.6, lr=.9, anti_front=.3, anti_rear=.7)
+        for family, model in (('full', 'rigid'), ('full', 'flex'), ('FR', 'half')):
+            with self.subTest(family=family, model=model):
+                p = parameters_for_analysis(self.p, family)
+                system = assemble(family, model, p)
+                zeros = np.zeros(len(system.labels))
+                mass = full['m'] if family == 'full' else 2 * (p['ms'] + p['mu'])
+                transfer = mass * 3 * full['h_cg'] / (full['lf'] + full['lr'])
+                expected = transfer * np.array([.3, -.7])
+                if family == 'full':
+                    expected = np.repeat(expected / 2, 2)
+                accelerating = system.input_force(zeros, zeros, 3., 0.)
+                braking = system.input_force(zeros, zeros, -3., 0.)
+                np.testing.assert_allclose(accelerating[system.body_dof:], expected)
+                np.testing.assert_allclose(braking, -accelerating)
+
     def test_roll_center_changes_body_roll_without_changing_total_transfer(self):
         self.p['parameters']['full']['h_rc_f']=0
         a=self.run_case('LR',scenario='cornering',duration=3,dt=.002,start=.1)
@@ -200,10 +241,13 @@ class DynamicsTests(unittest.TestCase):
 
     def test_linked_lateral_model_matches_full_front_axle_rates_and_mass(self):
         full = self.p['parameters']['full']
-        full.update(lf=.8, lr=1.2, mu_f=12., mu_r=19., tire_FL_mr=1.2, tire_FR_mr=.8,
-                    heave_f_mr=.9, roll_f_mr=1.1, corner_FL_k=2400., corner_FL_mr=1.3)
+        full.update(lf=.8, lr=1.2, mu_f=12., mu_r=19., tire_f_mr=1.2, tire_r_mr=.8,
+                    heave_f_mr=.9, roll_f_mr=1.1, corner_f_k=2400., corner_f_c=100., corner_f_mr=1.3,
+                    corner_r_k=5000., corner_r_c=200., corner_r_mr=.8)
         lateral = assemble('LR', 'half', parameters_for_analysis(self.p, 'LR'))
         vehicle = assemble('full', 'flex', full)
+        np.testing.assert_allclose(vehicle.channel_k[-4:], [4056., 4056., 3200., 3200.])
+        np.testing.assert_allclose(vehicle.channel_c[-4:], [169., 169., 128., 128.])
         np.testing.assert_allclose(lateral.ks, vehicle.ks[:2, :2])
         np.testing.assert_allclose(lateral.cs, vehicle.cs[:2, :2])
         np.testing.assert_allclose(lateral.kt, vehicle.kt[:2])
@@ -213,8 +257,7 @@ class DynamicsTests(unittest.TestCase):
 
     def test_linked_longitudinal_model_uses_selected_axle_on_both_ends(self):
         full = self.p['parameters']['full']
-        full.update(tire_RL_k=100000., tire_RR_k=140000., mu_r=23.,
-                    heave_r_mr=.8, corner_RL_k=5000., corner_RL_mr=1.2)
+        full.update(tire_r_k=120000., mu_r=23., heave_r_mr=.8, corner_r_k=5000., corner_r_mr=1.2)
         settings = dict(duration=.32, start=.02, dt=.003)
         front = self.run_case('FR', parameter_axle='front', **settings)
         rear = self.run_case('FR', parameter_axle='rear', **settings)
@@ -223,7 +266,7 @@ class DynamicsTests(unittest.TestCase):
         self.assertEqual((p['lf'], p['lr'], p['Iy']), (full['lf'], full['lr'], full['Iyy'] / 2))
         self.assertEqual((p['kt'], p['mu']), (120000., 23.))
         system = assemble('FR', 'half', p)
-        np.testing.assert_allclose(system.ks.diagonal(), 2 * full['heave_r_k'] * .8**2 + 3600.)
+        np.testing.assert_allclose(system.ks.diagonal(), 2 * full['heave_r_k'] * .8**2 + 7200.)
         self.assertGreater(np.max(np.abs(front.signals['Body F'] - rear.signals['Body F'])), .01)
         self.assertEqual(front.project['analysis']['FR']['parameter_axle'], 'front')
 

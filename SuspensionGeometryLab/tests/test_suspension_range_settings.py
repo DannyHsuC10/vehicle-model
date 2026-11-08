@@ -20,7 +20,7 @@ def legacy_project():
     a.pop("droop_mm")
     a.update(travel_mm=travel, roll_deg=2., pitch_deg=1.)
     for axle in ("front", "rear"):
-        project[axle].pop("anti_squat", None)
+        project[axle].pop("anti")
         project[axle].update(anti_dive=.2, anti_lift=0.)
         project[axle]["svsa"] = 0.
     return project
@@ -133,13 +133,13 @@ class RangeSettingTests(unittest.TestCase):
         original = copy.deepcopy(old)
         upgraded = validate(old)
         self.assertEqual(old, original)
-        self.assertEqual(upgraded["schema_version"], 4)
+        self.assertEqual(upgraded["schema_version"], 7)
         self.assertEqual(travel_limits(upgraded), (-30, 30))
         self.assertFalse({"travel_mm", "roll_deg", "pitch_deg"} & set(upgraded["analysis"]))
         self.assertGreater(upgraded["front"]["svsa"], 0)
         self.assertEqual(Engine(old).project, upgraded)
 
-    def test_old_svsa_override_preserves_geometry_and_saves_as_v4(self):
+    def test_old_svsa_override_preserves_geometry_and_saves_as_v7(self):
         old = legacy_project()
         old["front"]["svsa"], old["rear"]["svsa"] = 2.5, 3.
         root = Path(__file__).resolve().parents[1]/".test-tmp"
@@ -160,12 +160,12 @@ class RangeSettingTests(unittest.TestCase):
                 self.assertEqual(upgraded[axle]["svsa"], distance)
             save_project(path, old)
             self.assertEqual(load_project(path), upgraded)
-            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["schema_version"], 4)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["schema_version"], 7)
         # The design-mode migration must not change manually supplied hardpoints.
         old["hardpoints"] = {"enabled": True, "corners": from_scene(Engine(default_project()).scene)}
         self.assertEqual(Engine(old).scene.geometry["hardpoints"], old["hardpoints"]["corners"])
 
-    def test_removed_inputs_are_rejected_in_v4_and_bad_legacy_data_is_rejected(self):
+    def test_removed_inputs_and_bad_legacy_data_are_rejected(self):
         for group, key in (("analysis", "travel_mm"), ("analysis", "roll_deg"), ("analysis", "pitch_deg"), ("front", "anti_squat"), ("rear", "anti_dive")):
             project = default_project()
             project[group][key] = 1

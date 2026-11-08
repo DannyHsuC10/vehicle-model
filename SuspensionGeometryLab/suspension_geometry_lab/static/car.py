@@ -68,10 +68,7 @@ class SuspensionF:
         # ------------------------------------------------------------------
         self.mechanical_trail_sv = 15 / 1000  # Mechanical trail [m]
         self.caster_sv_deg = 5  # Caster angle [deg]
-        self.front_brake_bias_sv = 0.7  # Fraction of braking force at front axle
-        self.target_braking_anti_sv = .2  # Front braking anti-dive
-        self.drive_force_share_sv = 0.
-        self.target_drive_anti_sv = 0.
+        self.target_anti_sv = .2 / .7  # CP-to-IC slope normalized with positive X toward the other axle
         self.svsa = 3.4746810312241383  # Signed CP-to-IC horizontal distance [m]
 
         # Compatibility aliases retained for older side-view scripts.
@@ -104,10 +101,7 @@ class SuspensionR:
         # ------------------------------------------------------------------
         self.mechanical_trail_sv = 0 / 1000  # Mechanical trail [m]
         self.caster_sv_deg = 0.0  # Caster angle [deg]
-        self.front_brake_bias_sv = 0.7  # Fraction of braking force at front axle
-        self.target_braking_anti_sv = .08571428571428573  # Rear braking anti-lift
-        self.drive_force_share_sv = 1.
-        self.target_drive_anti_sv = 0.
+        self.target_anti_sv = .08571428571428573 / .3
         self.svsa = 3.48158902286549  # Positive toward the front axle [m]
 
         # Compatibility aliases retained for older side-view scripts.

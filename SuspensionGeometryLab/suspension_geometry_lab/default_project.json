@@ -1,5 +1,5 @@
 {
-  "schema_version": 4,
+  "schema_version": 7,
   "name": "StaticWireframe 基準車輛",
   "vehicle": {
     "wheelbase": 1.53, "cg_to_front": 0.7498400000000001,
@@ -15,14 +15,14 @@
     "upper_offset": 0.085, "lower_offset": 0.09,
     "lower_mount_x": 0.21, "upper_mount_x": 0.255,
     "caster_deg": 5.0, "mechanical_trail": 0.015,
-    "anti_dive": 0.2, "anti_lift": 0.0, "svsa": 3.4746810312241383
+    "anti": 0.2, "svsa": 4
   },
   "rear": {
     "fvsa": 1.0, "rc_height": 0.04, "kpi_deg": 13.0, "scrub_radius": 0.018,
     "upper_offset": 0.085, "lower_offset": 0.09,
     "lower_mount_x": 0.205, "upper_mount_x": 0.25,
     "caster_deg": 0.0, "mechanical_trail": 0.0,
-    "anti_lift": 0.1, "anti_squat": 0.0, "svsa": 2.984219162456135
+    "anti": 0.2, "svsa": 4
   },
   "analysis": {
     "bump_mm": 25.0, "droop_mm": 25.0,

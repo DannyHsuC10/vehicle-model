@@ -2,6 +2,7 @@
 import copy
 import csv
 import gc
+import json
 import math
 import os
 from pathlib import Path
@@ -18,7 +19,7 @@ import numpy as np
 
 from suspension_geometry_lab.project import default_project, load_project, save_project, validate, Car, SuspensionF, SuspensionR, DERIVED_AXLE_FIELDS
 from suspension_geometry_lab.engine import Engine, Unreachable, contact_frame, to_contact_frame, rotate2
-from suspension_geometry_lab.analysis import calculate_mapping, make_plot, static_point_rows, PLOTS
+from suspension_geometry_lab.analysis import ANTI_RESULT_LABELS, calculate_mapping, make_plot, static_point_rows, PLOTS
 from suspension_geometry_lab.export import point_rows, write_report
 from suspension_geometry_lab.static.fv.wireframe_geometry import build_wireframe_scene
 
@@ -191,20 +192,19 @@ class MotionTests(unittest.TestCase):
         self.assertAlmostEqual(pose["pitch_deg"], -.6, places=6)
         self.assertEqual(self.engine.solve_sv(0, 0), baseline)
 
-    def test_svsa_and_braking_anti_independently_set_static_ic(self):
+    def test_svsa_and_axle_anti_independently_set_static_ic(self):
         project = default_project()
-        project["vehicle"]["drive_force_front"] = 0.
         e = Engine(project)
         static = e.scene.geometry["side_view"].front
         distance = abs(static.initial_ic[0]-static.contact_point[0])
         state = e.solve_sv(0, 0)["metrics"]
-        self.assertAlmostEqual(state["anti_dive_front_pct"], 20)
+        self.assertAlmostEqual(state["anti_brake_front_pct"], 20)
         self.assertAlmostEqual(state["svsa_front_mm"], distance*1000)
         self.assertAlmostEqual(e.derived_parameters["front"]["svsa"], distance)
         project["front"]["svsa"] = 2.5
         changed = Engine(project)
         self.assertNotAlmostEqual(changed.derived_parameters["front"]["svsa"], distance)
-        self.assertAlmostEqual(changed.solve_sv(0, 0)["metrics"]["anti_dive_front_pct"], 20)
+        self.assertAlmostEqual(changed.solve_sv(0, 0)["metrics"]["anti_brake_front_pct"], 20)
         self.assertAlmostEqual(changed.solve_sv(0, 0)["metrics"]["svsa_front_mm"], 2500)
 
     def test_we_uses_static_axis_and_distinguishes_material_from_contact(self):
@@ -404,6 +404,61 @@ class GuiTests(unittest.TestCase):
         self.assertIsNone(panel.error)
         self.app.update()
 
+    def test_import_prompts_for_missing_cells_and_commits_only_valid_repair(self):
+        previous = self.app.project
+        revision = self.app.revision
+        source = copy.deepcopy(previous)
+        source["vehicle"].update(mass=None, cg_height="")
+        source["arm_mount_x"]["front"].pop("upper_front_x")
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as tmp:
+            path = Path(tmp) / "incomplete.json"
+            path.write_text(json.dumps(source), encoding="utf-8")
+            before = path.read_bytes()
+            self.app.path = Path(tmp) / "previous.json"
+
+            with patch.object(self.app, "wait_window", side_effect=lambda dialog: dialog.destroy()), \
+                 patch("suspension_geometry_lab.gui.filedialog.askopenfilename", return_value=str(path)):
+                self.app.open_project()
+            self.assertIs(self.app.project, previous)
+            self.assertEqual(self.app.path.name, "previous.json")
+            self.assertEqual(self.app.revision, revision)
+
+            def repair(dialog):
+                self.assertEqual([field.path for field in dialog.fields],
+                                 [("vehicle", "cg_height"), ("vehicle", "mass"),
+                                  ("arm_mount_x", "front", "upper_front_x")])
+                width, height = dialog.minsize()
+                dialog.geometry(f"{width}x{height}")
+                dialog.update()
+                dialog.canvas.yview_moveto(1)
+                dialog.update()
+                button = dialog.apply_button
+                self.assertTrue(button.winfo_viewable())
+                self.assertLessEqual(button.winfo_rooty() + button.winfo_height(),
+                                     dialog.canvas.winfo_rooty())
+                dialog.inputs[1].insert(0, "10")
+                button.invoke()
+                self.assertTrue(dialog.error.cget("text"))
+                self.assertIs(self.app.project, previous)
+                self.assertEqual(self.app.revision, revision)
+                dialog.inputs[1].delete(0, "end")
+                dialog.inputs[1].insert(0, "325")
+                dialog.inputs[2].insert(0, "400")
+                button.invoke()
+                self.assertIn("極限", dialog.error.cget("text"))
+                self.assertIs(self.app.project, previous)
+                dialog.inputs[2].delete(0, "end")
+                button.invoke()
+
+            with patch.object(self.app, "wait_window", side_effect=repair), \
+                 patch("suspension_geometry_lab.gui.filedialog.askopenfilename", return_value=str(path)):
+                self.app.open_project()
+            self.assertEqual(self.app.project["vehicle"]["mass"], 325)
+            self.assertEqual(self.app.project["vehicle"]["cg_height"], default_project()["vehicle"]["cg_height"])
+            self.assertTrue(self.app.dirty)
+            self.assertIsNone(self.app.path)
+            self.assertEqual(path.read_bytes(), before)
+
     def test_every_plot_exports_real_png_svg_csv_report(self):
         with tempfile.TemporaryDirectory(dir=TEST_TMP) as tmp:
             for key, panel in self.app.panels.items():
@@ -468,7 +523,6 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(self.app.panels["static"].entries[("front", "rc_height")].get(), "0.048")
         rev = self.app.revision
         invalid = copy.deepcopy(p)
-        invalid["vehicle"]["drive_force_front"] = 0.
         invalid["front"]["svsa"] = 0
         with self.assertRaises(ValueError):
             self.app.apply_project(invalid)
@@ -609,10 +663,9 @@ class GuiTests(unittest.TestCase):
 
     def test_parameter_preview_refreshes_vehicle_changes_without_applying(self):
         from suspension_geometry_lab.gui import ParameterEditor
-        from suspension_geometry_lab.input_limits import round_to_step
         original = copy.deepcopy(self.app.project)
         editor = ParameterEditor(self.app)
-        initial_anti = float(editor.derived_tree.item("anti_dive", "values")[0])
+        initial_anti = float(editor.derived_tree.item("anti_brake", "values")[0])
 
         def wait_for(condition):
             end = time.monotonic()+3
@@ -623,10 +676,10 @@ class GuiTests(unittest.TestCase):
 
         bias = editor.entries[("vehicle", "brake_bias_front")]
         bias.set("0.5")
-        expected = round_to_step(Engine(editor.candidate(True)).derived_parameters["front"]["anti_dive"], .05)
+        expected = Engine(editor.candidate(True)).derived_parameters["front"]["anti_brake"]
         self.assertNotEqual(initial_anti, expected)
         wait_for(lambda: bool(editor.derived_tree.get_children()) and
-                 abs(float(editor.derived_tree.item("anti_dive", "values")[0])-expected) < 1e-7)
+                 abs(float(editor.derived_tree.item("anti_brake", "values")[0])-expected) < 1e-7)
         self.assertEqual(self.app.project, original)
         bias.set("")
         wait_for(lambda: "需要數值" in editor.derivation_message.get())
@@ -696,13 +749,14 @@ class GuiTests(unittest.TestCase):
         self.assertIn(("front", "svsa"), editor.entries)
         self.assertIn(("rear", "svsa"), editor.entries)
         self.assertIn(("vehicle", "drive_force_front"), editor.entries)
-        self.assertIn(("front", "anti_lift"), editor.entries)
+        self.assertIn(("front", "anti"), editor.entries)
+        self.assertIn(("rear", "anti"), editor.entries)
         self.assertNotIn(("rear", "anti_dive"), editor.entries)
         self.assertTrue(editor.derived_tree.exists("svsa"))
         editor.entries[("analysis", "bump_mm")].set("40")
         editor.entries[("analysis", "droop_mm")].set("10")
         editor.apply()
-        self.assertEqual(self.app.project["schema_version"], 4)
+        self.assertEqual(self.app.project["schema_version"], 7)
         for page in ("front", "rear", "sv"):
             panel = self.app.panels[page]
             self.app.notebook.select(panel)
@@ -754,66 +808,63 @@ class GuiTests(unittest.TestCase):
                 np.testing.assert_allclose(point, [heave, m["roll_deg"], m["camber_left_deg"]], atol=1e-6)
                 self.assertEqual(panel.sliders[1].instate(["disabled"]), heave in (-10, 40))
 
-    def test_drive_anti_targets_preview_and_commit_with_dependent_svsa(self):
+    def test_shared_anti_and_svsa_keep_geometry_when_drive_share_is_edited(self):
         from suspension_geometry_lab.gui import ParameterEditor
         from suspension_geometry_lab.project import MOUNT_X_FIELDS
         project = copy.deepcopy(self.app.project)
         project["vehicle"]["drive_force_front"] = .25
         project["front"]["svsa"] = 2.5
         project["rear"]["svsa"] = 3.
-        project["front"]["anti_lift"] = .03
-        project["rear"]["anti_squat"] = .02
+        project["front"]["anti"] = .3
+        project["rear"]["anti"] = .2
         project["arm_mount_x"] = {axle: {key: None for key in MOUNT_X_FIELDS} for axle in ("front", "rear")}
         project["arm_mount_x"]["front"]["upper_front_x"] = .2001234567890123
         self.app.apply_project(project)
         before = self.app.engine.solve_sv(0, 0)["metrics"]
         editor = ParameterEditor(self.app)
-        self.assertIn(("front", "anti_dive"), editor.entries)
-        self.assertIn(("rear", "anti_lift"), editor.entries)
-        self.assertIn(("front", "anti_lift"), editor.entries)
-        self.assertEqual(str(editor.entry_widgets[("front", "anti_lift")].cget("state")), "normal")
-        self.assertEqual(str(editor.entry_widgets[("front", "svsa")].cget("state")), "readonly")
-        value = float(editor.derived_tree.item("anti_lift", "values")[0])
+        for axle in ("front", "rear"):
+            self.assertEqual({key for group, key in editor.entries if group == axle and key.startswith("anti")}, {"anti"})
+            for key in ("anti", "svsa"):
+                self.assertEqual(str(editor.entry_widgets[(axle, key)].cget("state")), "normal")
+        value = float(editor.derived_tree.item("anti_drive", "values")[0])
         self.assertNotAlmostEqual(value, 0)
         # This tree previews the fixed hardpoint draft. Its Anti scales with
-        # drive share, while the parameter-mode design target stays at 3%.
+        # drive share, while the parameter-mode Anti design target stays fixed.
         preview_anti = value * .5 / .25
         editor.entries[("vehicle", "drive_force_front")].set("0.5")
         deadline = time.time()+3
         while time.time() < deadline:
             self.app.update()
-            values = editor.derived_tree.item("anti_lift", "values")
+            values = editor.derived_tree.item("anti_drive", "values")
             if values and abs(float(values[0])-preview_anti) < 1e-7:
                 break
             time.sleep(.01)
-        self.assertAlmostEqual(float(editor.derived_tree.item("anti_lift", "values")[0]), preview_anti, places=7)
-        self.assertEqual(float(editor.entries[("front", "anti_lift")].get()), .03)
+        self.assertAlmostEqual(float(editor.derived_tree.item("anti_drive", "values")[0]), preview_anti, places=7)
+        self.assertEqual(float(editor.entries[("front", "anti")].get()), .3)
         self.assertEqual(float(editor.entries[("vehicle", "brake_bias_front")].get()), .7)
         self.assertEqual(self.app.project["vehicle"]["drive_force_front"], .25)
         editor.apply()
         self.assertEqual(self.app.project["vehicle"]["drive_force_front"], .5)
         after = self.app.engine.solve_sv(0, 0)["metrics"]
-        self.assertAlmostEqual(after["anti_lift_front_pct"], 3)
-        self.assertAlmostEqual(after["anti_squat_rear_pct"], 2)
-        self.assertNotAlmostEqual(after["svsa_front_mm"], before["svsa_front_mm"])
+        self.assertAlmostEqual(after["anti_drive_front_pct"], 15)
+        self.assertAlmostEqual(after["anti_drive_rear_pct"], 10)
+        self.assertEqual(after["svsa_front_mm"], before["svsa_front_mm"])
         self.assertEqual(self.app.project["arm_mount_x"], project["arm_mount_x"])
-        self.assertAlmostEqual(after["anti_lift_rear_pct"], before["anti_lift_rear_pct"], places=10)
+        self.assertAlmostEqual(after["anti_brake_rear_pct"], before["anti_brake_rear_pct"], places=10)
         panel = self.app.panels["sv"]
         self.app.notebook.select(panel)
-        for key in ("anti_lift_front_pct", "anti_lift_rear_pct", "anti_squat_rear_pct"):
+        for key in ("anti_brake_front_pct", "anti_brake_rear_pct", "anti_drive_front_pct", "anti_drive_rear_pct"):
             panel.plot.set(dict(PLOTS["sv"])[key])
             panel.request()
             self.wait(panel)
             self.assertIsNone(panel.error)
             self.assertTrue(panel.chart.spec["markers"])
 
-    def test_zero_drive_switches_editable_inputs_and_preserves_that_axle_ic(self):
+    def test_force_share_edits_preserve_anti_inputs_and_geometry(self):
         from suspension_geometry_lab.gui import ParameterEditor
         editor = ParameterEditor(self.app)
+        previous = Engine(editor.candidate(False))
         for new in (.4, 0., 1., .3):
-            old = editor._input_drive_front
-            previous = Engine(editor.candidate(False))
-            previous_ic = {axle: previous.sv[axle].template.initial_ic.copy() for axle in ("front", "rear")}
             editor.entries[("vehicle", "drive_force_front")].set(str(new))
             deadline = time.time()+3
             while time.time() < deadline:
@@ -822,24 +873,46 @@ class GuiTests(unittest.TestCase):
                     break
                 time.sleep(.01)
             current = Engine(editor.candidate(False))
-            for axle, old_share, share in (("front", old, new), ("rear", 1-old, 1-new)):
-                key = "anti_lift" if axle == "front" else "anti_squat"
-                self.assertEqual(str(editor.entry_widgets[(axle, "svsa")].cget("state")), "normal" if share == 0 else "readonly")
-                self.assertEqual(str(editor.entry_widgets[(axle, key)].cget("state")), "readonly" if share == 0 else "normal")
-                if (old_share == 0) != (share == 0):
-                    np.testing.assert_allclose(current.sv[axle].template.initial_ic, previous_ic[axle], atol=1e-9)
-                if share == 0:
-                    self.assertEqual(float(editor.entries[(axle, key)].get()), 0)
+            for axle in ("front", "rear"):
+                for key in ("anti", "svsa"):
+                    self.assertEqual(str(editor.entry_widgets[(axle, key)].cget("state")), "normal")
+                np.testing.assert_array_equal(current.sv[axle].template.initial_ic, previous.sv[axle].template.initial_ic)
         editor.apply()
         panel = self.app.panels["sv"]
         self.app.notebook.select(panel)
+        panel.entries[("front", "anti")].set("0.20")
+        panel.entries[("front", "svsa")].set("3")
+        panel.apply()
+        front = self.app.engine.sv["front"].template
+        np.testing.assert_allclose(front.initial_ic-front.contact_point,
+                                   [3., .6*self.app.engine.car.h_cog/self.app.engine.car.l])
+        self.wait(panel)
+        metrics = dict(panel.metrics.item(item, "values") for item in panel.metrics.get_children())
+        for key, value in (("anti_front_pct", 20), ("anti_brake_front_pct", 14), ("anti_drive_front_pct", 6)):
+            self.assertAlmostEqual(float(metrics[ANTI_RESULT_LABELS[key]]), value)
+        panel.controls[0].set(12.)
+        panel.controls[1].set(-5.)
+        panel.request()
+        self.wait(panel)
+        before = panel.state
         panel.entries[("vehicle", "drive_force_front")].set("1")
-        self.assertEqual(str(panel.entry_widgets[("front", "svsa")].cget("state")), "readonly")
-        self.assertEqual(str(panel.entry_widgets[("rear", "svsa")].cget("state")), "normal")
-        self.assertEqual(str(panel.entry_widgets[("rear", "anti_squat")].cget("state")), "readonly")
+        for axle in ("front", "rear"):
+            for key in ("anti", "svsa"):
+                self.assertEqual(str(panel.entry_widgets[(axle, key)].cget("state")), "normal")
+        panel.entries[("vehicle", "brake_bias_front")].set("0.5")
         panel.apply()
         self.assertEqual(self.app.project["vehicle"]["drive_force_front"], 1)
-        self.assertEqual(self.app.engine.solve_sv(0, 0)["metrics"]["anti_squat_rear_pct"], 0)
+        self.assertEqual(self.app.engine.solve_sv(0, 0)["metrics"]["anti_drive_rear_pct"], 0)
+        self.wait(panel)
+        self.assertEqual([var.get() for var in panel.controls], [12., -5.])
+        self.assertEqual(panel.state["points"], before["points"])
+        metrics = dict(panel.metrics.item(item, "values") for item in panel.metrics.get_children())
+        self.assertAlmostEqual(float(metrics[ANTI_RESULT_LABELS["anti_brake_front_pct"]]),
+                               before["metrics"]["anti_brake_front_pct"]*.5/.7, places=5)
+        panel.entries[("rear", "svsa")].set("3")
+        panel.apply()
+        self.assertEqual(self.app.project["rear"]["svsa"], 3)
+        self.assertAlmostEqual(self.app.engine.derived_parameters["rear"]["svsa"], 3)
 
     def test_sliders_preserve_viewport_zoom_pan_and_3d_camera(self):
         for key in ("front", "rear", "sv", "we"):

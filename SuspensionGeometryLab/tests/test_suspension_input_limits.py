@@ -20,23 +20,19 @@ class InputLimitTests(unittest.TestCase):
     def test_edited_values_snap_to_steps_and_legacy_values_are_preserved(self):
         from types import SimpleNamespace
         from suspension_geometry_lab.gui import read_entries
-        from suspension_geometry_lab.input_limits import round_anti_metrics
 
         project = default_project()
         project["front"]["caster_deg"] = 5.123
         entries = {field: SimpleNamespace(get=lambda text=text: text)
                    for field, text in {("vehicle", "track_front"): "1.253",
-                                       ("front", "anti_dive"): "0.225",
+                                       ("front", "anti"): "0.225",
                                        ("front", "scrub_radius"): "-0.0015",
                                        ("front", "caster_deg"): "5.123"}.items()}
         result = read_entries(project, entries)
         self.assertEqual(result["vehicle"]["track_front"], 1.255)
-        self.assertEqual(result["front"]["anti_dive"], .25)
+        self.assertEqual(result["front"]["anti"], .25)
         self.assertEqual(result["front"]["scrub_radius"], -.002)
         self.assertEqual(result["front"]["caster_deg"], 5.123)
-        metrics = {"anti_lift_front_pct": 7.5, "anti_lift_rear_pct": None, "caster_front_deg": 5.123}
-        round_anti_metrics(metrics)
-        self.assertEqual(metrics, {"anti_lift_front_pct": 10, "anti_lift_rear_pct": None, "caster_front_deg": 5.123})
 
     def test_defaults_are_equal_drive_and_keep_the_original_static_geometry(self):
         project = default_project()
@@ -59,26 +55,22 @@ class InputLimitTests(unittest.TestCase):
                 for value in (limit.low-1, limit.high+1):
                     with self.subTest(group=group, key=key, value=value):
                         project = default_project()
-                        if key == "svsa":
-                            project["vehicle"]["drive_force_front"] = 0. if group == "front" else 1.
                         project[group][key] = value
-                        with self.assertRaisesRegex(ValueError, "允許範圍"):
+                        with self.assertRaisesRegex(ValueError, "允許範圍|有限數值"):
                             validate(project)
 
     def test_signed_targets_and_exact_closed_endpoints_remain_available(self):
         project = default_project()
-        project["front"].update(anti_lift=-.05, scrub_radius=-.02, mechanical_trail=-.01)
-        project["rear"]["anti_squat"] = -.05
+        project["front"].update(anti=-.05, scrub_radius=-.02, mechanical_trail=-.01)
+        project["rear"]["anti"] = -.05
         project["analysis"].update(bump_mm=0, droop_mm=200, samples=51,
                                    caster_min_deg=-45, caster_max_deg=45, steer_deg=80)
         validate(project)
         Engine(project)
         for drive in (0., 1.):
-            project["vehicle"]["drive_force_front"] = drive
+            project["vehicle"].update(drive_force_front=drive, brake_bias_front=drive)
             validate(project)
-        for group, key, value in (("vehicle", "brake_bias_front", 0),
-                                  ("vehicle", "brake_bias_front", 1),
-                                  ("analysis", "steer_deg", 0), ("analysis", "samples", 5.5)):
+        for group, key, value in (("analysis", "steer_deg", 0), ("analysis", "samples", 5.5)):
             bad = default_project()
             bad[group][key] = value
             with self.assertRaises(ValueError):

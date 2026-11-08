@@ -71,10 +71,11 @@ Pitch 分別輸出串聯／純主簧的僅懸吊／含輪胎結果；前後 Anti
 前後車體等效剛性 Kc_i 為獨立、固定輸入，不隨 Tender 工況縮放。
 Anti 僅用純 Heave 主簧，依指定規則設定：
     front_anti_dive = a_f
-    anti_scrub = a_r * a_acc / ax
     rear_anti_lift = front_anti_dive
-    front_anti_lift = anti_scrub
-    rear_anti_squat = front_anti_lift
+    rear_anti_squat = a_r * a_acc / ax
+    front_anti_lift = rear_anti_squat
+    front_anti = max(front_anti_dive, front_anti_lift)
+    rear_anti = max(rear_anti_squat, rear_anti_lift)
 煞車方向的純主簧 Pitch 使用設定後的前 Anti-dive 與後 Anti-lift：
     G_pitch_anti = (1 - front_anti_dive) * G_susp_front + (1 - rear_anti_lift) * G_susp_rear + G_tire
 此為剛性類比設定值；幾何硬點與實際煞車力路徑未在此模型中求解。
@@ -624,11 +625,18 @@ def calculate_anti_assignments(front_suspension_stiffness, rear_suspension_stiff
     result = calculate_axle_anti(front_suspension_stiffness, rear_suspension_stiffness,
                                  front_chassis_stiffness, rear_chassis_stiffness)
     front_dive = result["front"]["anti_ratio"]
-    scrub = result["rear"]["anti_ratio"] * acceleration_ratio
+    rear_squat = result["rear"]["anti_ratio"] * acceleration_ratio
+    rear_lift = front_dive
+    front_lift = rear_squat
     result["acceleration_ratio"] = acceleration_ratio
-    for name, ratio in (("front_anti_dive", front_dive), ("anti_scrub", scrub),
-                        ("rear_anti_lift", front_dive), ("front_anti_lift", scrub),
-                        ("rear_anti_squat", scrub)):
+    for name, ratio in (
+        ("front_anti_dive", front_dive),
+        ("rear_anti_lift", rear_lift),
+        ("rear_anti_squat", rear_squat),
+        ("front_anti_lift", front_lift),
+        ("front_anti", max(front_dive, front_lift)),
+        ("rear_anti", max(rear_squat, rear_lift)),
+    ):
         percent = ratio * 100
         if not math.isfinite(ratio) or not math.isfinite(percent):
             raise ValueError(f"{name} 換算後必須為有限值")
@@ -1169,7 +1177,7 @@ def _solve(
     sus_travel, tf, tr, A_air, air_density_kg_per_m3,
     kf, kr, target_pitch_angle_deg, target_roll_angle_deg,
     kpi_deg, min_turn_radius_m, caster_direction_check_deg,
-    MR, sprung_roll_inertia_kg_m2, Kt, wl_mu_y, mu_w,
+    MR, zeta, sprung_roll_inertia_kg_m2, Kt, wl_mu_y, mu_w,
     R_tire, drive_motor_torque_Nm, drive_motor_rpm, N,
     rc_chassis_stiffness_ratio,
     anti_front_chassis_stiffness_N_per_m,
@@ -1338,10 +1346,10 @@ def _solve(
         anti_front_chassis_stiffness_N_per_m, anti_rear_chassis_stiffness_N_per_m,
         a_acc, ax,
     )}
-    emit("\nAnti 設定（前後剛性基準、AntiScrub 與前後 Anti-lift）：")
+    emit("\nAnti 設定（前後剛性基準、後 Anti-squat 與前後 Anti-lift）：")
     emit("Anti 僅使用純 Heave 主簧剛性。")
     emit("K_eq_i = (1 - a_i)^2 Kz_i + a_i^2 Kc_i；a_i = Kz_i / (Kz_i + Kc_i)")
-    for axle, axle_label in (("front", "前軸剛性基準"), ("rear", "後軸剛性基準（AntiScrub 來源）")):
+    for axle, axle_label in (("front", "前軸剛性基準"), ("rear", "後軸剛性基準（後 Anti-squat 來源）")):
         values = anti_result['heave_only'][axle]
         emit(f"純 Heave，{axle_label}：Kz = {values['suspension_stiffness_N_per_m']:.6f} N/m，"
               f"Kc = {values['chassis_stiffness_N_per_m']:.6f} N/m，"
@@ -1349,12 +1357,13 @@ def _solve(
               f"K_eq = {values['equivalent_stiffness_N_per_m']:.6f} N/m")
     settings = anti_result['heave_only']
     emit(f"前 Anti-dive = 前軸剛性基準 = {settings['front_anti_dive_percent']:.6f}%")
-    emit(f"AntiScrub = 後軸剛性基準 * a_acc / ax "
-          f"= {settings['rear']['anti_ratio']:.9f} * {a_acc:g} / {ax:g} "
-          f"= {settings['anti_scrub_percent']:.6f}%")
     emit(f"後 Anti-lift = 前 Anti-dive = {settings['rear_anti_lift_percent']:.6f}%")
-    emit(f"前 Anti-lift = AntiScrub = {settings['front_anti_lift_percent']:.6f}%")
-    emit(f"後 Anti-squat = 前 Anti-lift = {settings['rear_anti_squat_percent']:.6f}%")
+    emit(f"後 Anti-squat = 後軸剛性基準 * a_acc / ax "
+         f"= {settings['rear']['anti_ratio']:.9f} * {a_acc:g} / {ax:g} "
+         f"= {settings['rear_anti_squat_percent']:.6f}%")
+    emit(f"前 Anti-lift = 後 Anti-squat = {settings['front_anti_lift_percent']:.6f}%")
+    emit(f"前 Anti = max(前 Anti-dive, 前 Anti-lift) = {settings['front_anti_percent']:.6f}%")
+    emit(f"後 Anti = max(後 Anti-squat, 後 Anti-lift) = {settings['rear_anti_percent']:.6f}%")
 
     rc_result = calculate_roll_center(h_cog, rc_chassis_stiffness_ratio)
     emit("\nroll_center：正規化等效剛性與 Roll Center 高度：")
@@ -1685,7 +1694,7 @@ def _solve(
         "use_tender", "ms", "mu", "h_cog", "lf", "lr", "ax", "ay", "a_acc", "brake_ax", "target_lap_time_s",
         "drive_target_speed_kmh", "sus_travel", "tf", "tr", "t", "A_air", "air_density_kg_per_m3",
         "kf", "kr", "target_pitch_angle_deg", "target_roll_angle_deg", "kpi_deg", "min_turn_radius_m",
-        "caster_direction_check_deg", "MR", "sprung_roll_inertia_kg_m2", "Kt", "wl_mu_y", "mu_w",
+        "caster_direction_check_deg", "MR", "zeta", "sprung_roll_inertia_kg_m2", "Kt", "wl_mu_y", "mu_w",
         "R_tire", "drive_motor_torque_Nm", "drive_motor_rpm", "N", "rc_chassis_stiffness_ratio",
         "anti_front_chassis_stiffness_N_per_m", "anti_rear_chassis_stiffness_N_per_m",
         "F_ref_ratio", "wl_aero_front_ratio", "cg_safety_factor", "brake_driver_force_N",

@@ -67,9 +67,6 @@
       "tire_RR_c": 1427.7254638059796,
       "tire_RR_mr": 1,
       "zeta": 0.7,
-      "k_frame": 1000000.0,
-      "c_frame": 150.0,
-      "m_frame": 65.0,
       "tender_enabled": true,
       "tender_stiffness_N_per_m": 124195.07143003517,
       "heave_configuration": "main_spring"

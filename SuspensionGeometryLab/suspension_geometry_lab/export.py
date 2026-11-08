@@ -7,7 +7,7 @@ import math
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from .analysis import NOTES, PAGES
+from .analysis import ANTI_RESULT_LABELS, NOTES, PAGES
 from .engine import to_contact_frame
 from .static.fv.wireframe_geometry import project_fv
 
@@ -130,7 +130,10 @@ def write_step(path, engine, page, state=None, *, show_construction=True):
 def write_report(path, project, page, state, mapping, svg, controls, *, derived_parameters=None, mount_position_checks=None):
     esc = lambda value: html.escape(str(value))
     metrics = state.get("metrics", {}) if state else {}
-    metric_table = "".join(f"<tr><th>{esc(k)}</th><td>{esc('N/A' if v is None else format(v, '.7g') if isinstance(v, (float, int)) else v)}</td></tr>" for k, v in metrics.items())
+    metric_table = "".join(
+        f"<tr><th>{esc(ANTI_RESULT_LABELS.get(k, k))}</th>"
+        f"<td>{esc('N/A' if v is None else format(v, '.7g') if isinstance(v, (float, int)) else v)}</td></tr>"
+        for k, v in metrics.items())
     coverage = f"範圍掃描：{mapping['valid']} / {mapping['total']} 筆有效。缺值代表不可達姿態或無有限交點。" if mapping else "本報告未包含範圍掃描。"
     snapshot = json.dumps({"project": project, "view_controls": controls,
                            "static_parameters": derived_parameters,

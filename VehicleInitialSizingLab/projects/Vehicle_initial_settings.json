@@ -1,7 +1,7 @@
 {
-  "application": "SuspensionDynamicsLab",
+  "application": "VehicleInitialSizingLab-DynamicsExport",
   "schema_version": 1,
-  "name": "LP03",
+  "name": "車輛初步設計",
   "parameters": {
     "full": {
       "m": 320.0,
@@ -14,14 +14,10 @@
       "Iyy": 100.0,
       "h_rc_f": 0.02727272727272727,
       "h_rc_r": 0.03306666666666667,
-      "dive_front": 0.0943798655466936,
-      "lift_front": 0.056627919328016155,
-      "squat_rear": 0.056627919328016155,
-      "lift_rear": 0.0943798655466936,
+      "anti_front": 0.0943798655466936,
+      "anti_rear": 0.0943798655466936,
       "drive_front": 0.5,
       "brake_front": 0.7530556371361202,
-      "body_twist_k": 180000.0,
-      "body_twist_c": 300.0,
       "mu_f": 13.0,
       "mu_r": 13.0,
       "heave_f_k": 18974.983348595713,
@@ -42,37 +38,46 @@
       "warp_k": 0.0,
       "warp_c": 0.0,
       "warp_mr": 1.0,
-      "corner_FL_k": 0,
-      "corner_FL_c": 0,
-      "corner_FL_mr": 1,
-      "corner_FR_k": 0,
-      "corner_FR_c": 0,
-      "corner_FR_mr": 1,
-      "corner_RL_k": 0,
-      "corner_RL_c": 0,
-      "corner_RL_mr": 1,
-      "corner_RR_k": 0,
-      "corner_RR_c": 0,
-      "corner_RR_mr": 1,
-      "tire_FL_k": 80000.0,
-      "tire_FL_c": 1427.7254638059796,
-      "tire_FL_mr": 1,
-      "tire_FR_k": 80000.0,
-      "tire_FR_c": 1427.7254638059796,
-      "tire_FR_mr": 1,
-      "tire_RL_k": 80000.0,
-      "tire_RL_c": 1427.7254638059796,
-      "tire_RL_mr": 1,
-      "tire_RR_k": 80000.0,
-      "tire_RR_c": 1427.7254638059796,
-      "tire_RR_mr": 1,
+      "corner_f_k": 0,
+      "corner_f_c": 0,
+      "corner_f_mr": 1,
+      "corner_r_k": 0,
+      "corner_r_c": 0,
+      "corner_r_mr": 1,
+      "tire_f_k": 80000.0,
+      "tire_f_c": 1427.7254638059796,
+      "tire_f_mr": 1,
+      "tire_r_k": 80000.0,
+      "tire_r_c": 1427.7254638059796,
+      "tire_r_mr": 1,
       "zeta": 0.7,
-      "k_frame": 1000000.0,
-      "c_frame": 150.0,
-      "m_frame": 65.0,
+      "k_frame": 636283.0341215229,
+      "m_frame": 67.0,
       "tender_enabled": true,
       "tender_stiffness_N_per_m": 124195.07143003517,
       "heave_configuration": "main_spring"
+    }
+  },
+  "geometry": {
+    "vehicle": {
+      "gravity": 9.81,
+      "free_radius": 0.2,
+      "clearance_steer_deg": 27.02158159117704
+    },
+    "front": {
+      "fvsa": 0.9720432720386547,
+      "kpi_deg": 8.0,
+      "caster_deg": 6.300571795348271
+    },
+    "rear": {
+      "fvsa": 0.9720432720386547,
+      "kpi_deg": 8.0,
+      "caster_deg": 0.0
+    },
+    "analysis": {
+      "bump_mm": 25.0,
+      "droop_mm": 25.0,
+      "steer_deg": 27.02158159117704
     }
   }
 }

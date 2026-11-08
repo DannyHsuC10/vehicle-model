@@ -41,9 +41,7 @@ TARGETS = {"all": "全部輪位", "left": "左側", "right": "右側", "front": 
 
 
 def scenarios(family, model):
-    result = ["bump", "step", "sine", "random"]
-    if family == "quarter":
-        result.extend(ISO_ROUGHNESS)
+    result = ["bump", "step", "sine", "random", *ISO_ROUGHNESS]
     if family in ("LR", "full"):
         result.append("cornering")
     if family == "LR":
@@ -67,7 +65,7 @@ Motion ratio 採 MR = 彈簧行程 / 輪端行程，輪端 k、c = 元件 k、c 
 
 左右：雙質點模型沒有獨立車身慣量，側傾由兩個角落位移推導，側向慣性力矩以左右反向的等效力施加。車身模型使用 z、roll 與 Ix。模態 e_h=dL+dR、e_r=dL−dR，輪端力 = ½ Tᵀ diag(k_h,k_r) T d，加上各角直推元件。所有左右版本使用相同模態倍率。車架傳力版增加一個受 RC 力驅動的虛擬質量，因此實際為 5 DOF。
 
-前後：本族為一側半車，總簧上質量 2ms，前後各一個 mu。前後通道 k_heave 與 k_corner 相加，不再讓 2 DOF 與 4 DOF 使用不同的彈簧倍率。無輪胎版本直接以路面作基座，不使用 Anti；有輪胎版本將 Anti 力矩同時反作用至車身與輪胎。
+前後：本族為一側半車，總簧上質量 2ms，前後各一個 mu。前後通道 k_heave 與 k_corner 相加，2 DOF 與 4 DOF 共用彈簧倍率。無輪胎版本直接以路面作基座。有輪胎版本使用前後軸 Anti 比例與縱向加速度，將垂向力施加在車身與輪胎之間。
 
 全車：剛性版 q=[z,roll,pitch,zu_FL,zu_FR,zu_RL,zu_RR]。可扭轉版將 roll 分為前後兩個，並以 body_twist 的 N·m/rad 與 N·m·s/rad 耦合。十個懸吊通道保留原始 heave_f/r、roll_f/r、roll_c、warp 與四角直推；e=T(zs−zu)，輪端力=Tᵀ diag(k·MR²)e。車身力矩以 BᵀF 取得，使用半輪距，確保功與能量一致。前、後輪各有一個每輪簧下質量，同軸左右相同。簧上質量為總質量減去 2(mu_f + mu_r)。
 

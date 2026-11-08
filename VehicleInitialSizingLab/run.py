@@ -10,7 +10,7 @@ from threading import Thread
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from dynamics_export import EXPORT_FIELDS, build_dynamics_export, validate_export_settings
+from dynamics_export import build_dynamics_export
 from project import FIELDS, PROJECT_FORMAT, SCHEMA, FieldError, default_project, read_project, validate_inputs
 from vehicle_initial_sizing import solve
 from vehicle_initial_sizing_report import render_csv_results, render_markdown_report
@@ -49,7 +49,7 @@ def write_text(path, content, encoding="utf-8"):
 
 class WorkbenchWindow(tk.Tk):
     def __init__(self):
-        defaults = default_project(include_dynamics=True)
+        defaults = default_project()
         super().__init__()
         self.title("Vehicle Initial Sizing Lab · 車輛初步設計")
         self.geometry("1380x860")
@@ -98,7 +98,7 @@ class WorkbenchWindow(tk.Tk):
         self.csv_button = ttk.Button(footer, text="匯出 CSV", command=self.save_csv, state="disabled")
         self.csv_button.pack(side="right", padx=(0, 6))
         self.dynamics_button = ttk.Button(
-            footer, text="匯出 Dynamics JSON", command=self.save_dynamics, state="disabled")
+            footer, text="匯出json", command=self.save_dynamics, state="disabled")
         self.dynamics_button.pack(side="right", padx=(0, 6))
         ttk.Label(footer, textvariable=self.status).pack(side="left", fill="x", expand=True)
 
@@ -116,11 +116,6 @@ class WorkbenchWindow(tk.Tk):
         self.groups.pack(fill="both", expand=True)
         for group in SCHEMA:
             self.add_group(group)
-        self.add_group({
-            "title": "Dynamics 專案匯出設定", "tab": "Dynamics",
-            "fields": [{"name": name, "label": label, "unit": unit, "kind": "number"}
-                       for name, (label, unit, _) in EXPORT_FIELDS.items()],
-        })
 
         result_tools = ttk.Frame(right)
         result_tools.pack(fill="x", pady=(0, 6))
@@ -278,7 +273,7 @@ class WorkbenchWindow(tk.Tk):
 
     def load_defaults(self):
         try:
-            return default_project(include_dynamics=True)
+            return default_project()
         except (OSError, ValueError, ArithmeticError) as error:
             messagebox.showwarning("無法載入預設參數", str(error), parent=self)
             return None
@@ -342,7 +337,7 @@ class WorkbenchWindow(tk.Tk):
             return
         path = Path(filename)
         try:
-            values = read_project(path, include_dynamics=True)
+            values = read_project(path)
         except (ValueError, OSError, ArithmeticError) as error:
             messagebox.showwarning("開啟失敗", str(error), parent=self)
             return
@@ -353,7 +348,6 @@ class WorkbenchWindow(tk.Tk):
     def save_project(self, as_new=False):
         try:
             values = validate_inputs(self.values())
-            settings = self.dynamics_values()
             path = self.project_path
             if path is None or as_new:
                 if path is None:
@@ -367,8 +361,7 @@ class WorkbenchWindow(tk.Tk):
                 if not filename:
                     return False
                 path = Path(filename)
-            payload = {"application": PROJECT_FORMAT, "schema_version": 1, "parameters": values,
-                       "dynamics_export": settings}
+            payload = {"application": PROJECT_FORMAT, "schema_version": 1, "parameters": values}
             write_text(path, json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
         except (OSError, ValueError, ArithmeticError) as error:
             messagebox.showwarning("專案儲存失敗", str(error), parent=self)
@@ -395,16 +388,6 @@ class WorkbenchWindow(tk.Tk):
             except ValueError as error:
                 raise FieldError(FIELDS[name], "須填入有限數值。") from error
         return values
-
-    def dynamics_values(self):
-        values = {}
-        for name, (label, _, _) in EXPORT_FIELDS.items():
-            variable, _, _ = self.inputs[name]
-            try:
-                values[name] = float(variable.get().strip())
-            except ValueError as error:
-                raise ValueError(f"{label}須填入有限數值。") from error
-        return validate_export_settings(values)
 
     def calculate(self):
         if not self.ready or self.busy:
@@ -484,28 +467,28 @@ class WorkbenchWindow(tk.Tk):
             return
         name = self.project_path.stem if self.project_path else "車輛初步設計"
         try:
-            project = build_dynamics_export(self.snapshot, self.dynamics_values(), name)
+            project = build_dynamics_export(self.snapshot, name)
         except (OSError, ValueError, ArithmeticError) as error:
-            messagebox.showwarning("Dynamics 匯出失敗", str(error), parent=self)
+            messagebox.showwarning("JSON 匯出失敗", str(error), parent=self)
             return
         filename = filedialog.asksaveasfilename(
-            parent=self, title="匯出 Dynamics 全車參數",
+            parent=self, title="匯出json",
             initialdir=self.project_path.parent if self.project_path else WEB.parent,
-            initialfile=f"{self.project_path.stem if self.project_path else 'vehicle'}_dynamics.json",
-            defaultextension=".json", filetypes=[("Dynamics 全車參數", "*.json")],
+            initialfile="Vehicle_initial_settings.json",
+            defaultextension=".json", filetypes=[("JSON", "*.json")],
         )
         if not filename:
             return
         path = Path(filename)
         if self.project_path is not None and path.resolve() == self.project_path.resolve():
-            messagebox.showwarning("Dynamics 匯出失敗", "請選擇與目前參數專案不同的檔名。", parent=self)
+            messagebox.showwarning("JSON 匯出失敗", "請選擇與目前參數專案不同的檔名。", parent=self)
             return
         try:
             write_text(path, json.dumps(project, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
         except (OSError, ValueError) as error:
-            messagebox.showwarning("Dynamics 匯出失敗", str(error), parent=self)
+            messagebox.showwarning("JSON 匯出失敗", str(error), parent=self)
         else:
-            self.status.set(f"已匯出 Dynamics JSON · {path.name}")
+            self.status.set(f"已匯出 JSON · {path.name}")
 
     def close(self):
         if self.closing or not self.discard_ok():

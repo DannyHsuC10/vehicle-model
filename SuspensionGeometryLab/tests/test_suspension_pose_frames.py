@@ -70,7 +70,7 @@ class PoseFrameTests(unittest.TestCase):
     def test_anti_uses_current_cg_height_and_contact_spacing_not_nominal_values(self):
         engine = Engine(default_project())
         # Analytic pose: road Z=.02, CG Z=.52 -> h=.5 m; contacts 2 m
-        # apart; IC/contact slope=.2; 70% front brakes -> anti=56%.
+        # apart; CP/IC slope toward the rear axle is .2; 70% front brakes -> 56%.
         front = {"contact": np.array([-1., .02]), "center": np.array([-1., .22]),
                  "ic": np.array([-.5, .12]), "au": np.array([-.95, .35]), "al": np.array([-.97, .15]),
                  "kg": np.array([-1., .02]), "kt": np.array([-.9, .7]), "angle": 0.}
@@ -88,7 +88,7 @@ class PoseFrameTests(unittest.TestCase):
                 state = engine.solve_sv(0, 0)
             self.assertAlmostEqual(state["metrics"]["wheelbase_mm"], 2000, places=8)
             self.assertAlmostEqual(state["metrics"]["cg_height_mm"], 500, places=8)
-            self.assertAlmostEqual(state["metrics"]["anti_dive_front_pct"], 56, places=8)
+            self.assertAlmostEqual(state["metrics"]["anti_brake_front_pct"], 56, places=8)
             np.testing.assert_allclose(cg_marker(make_plot("sv", "motion", state)), [0, .5], atol=1e-12)
 
     def test_nonpositive_cg_height_is_na_and_pose_sweeps_use_current_height(self):
@@ -112,7 +112,7 @@ class PoseFrameTests(unittest.TestCase):
              patch.object(engine.sv["rear"], "side", return_value=contacts[1]):
             state = engine.solve_sv(0, 0)
         self.assertLess(state["metrics"]["cg_height_mm"], 0)
-        self.assertIsNone(state["metrics"]["anti_dive_front_pct"])
+        self.assertIsNone(state["metrics"]["anti_brake_front_pct"])
         np.testing.assert_array_equal(state["points"]["CG"], zero["points"]["CG"])
 
 

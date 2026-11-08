@@ -25,7 +25,10 @@ class InputLimit:
                 and abs(value) >= self.min_abs)
 
     def describe(self, unit=""):
-        text = f"{'(' if self.open_low else '['}{self.low:g}, {self.high:g}{')' if self.open_high else ']'}"
+        if self.low == -math.inf and self.high == math.inf:
+            text = "有限數值"
+        else:
+            text = f"{'(' if self.open_low else '['}{self.low:g}, {self.high:g}{')' if self.open_high else ']'}"
         if unit:
             text += " " + unit
         if self.integer:
@@ -43,7 +46,7 @@ VEHICLE_LIMITS = {
     "free_radius": InputLimit(.1, .6), "tire_stiffness": InputLimit(10000, 1000000),
     "tire_width": InputLimit(.05, .6), "rim_inner_diameter": InputLimit(.1, 1),
     "rim_gap": InputLimit(0, .1), "clearance_steer_deg": InputLimit(0, 80),
-    "brake_bias_front": InputLimit(0, 1, open_low=True, open_high=True),
+    "brake_bias_front": InputLimit(0, 1),
     "drive_force_front": InputLimit(0, 1),
 }
 AXLE_LIMITS = {
@@ -52,8 +55,7 @@ AXLE_LIMITS = {
     "upper_offset": InputLimit(.005, .5), "lower_offset": InputLimit(.005, .5),
     "lower_mount_x": InputLimit(0, 1.5), "upper_mount_x": InputLimit(0, 1.5),
     "caster_deg": InputLimit(-45, 45), "mechanical_trail": InputLimit(-.3, .3),
-    "anti_dive": InputLimit(-2, 3), "anti_lift": InputLimit(-2, 3),
-    "anti_squat": InputLimit(-2, 3), "svsa": InputLimit(-100, 100, min_abs=.05),
+    "anti": InputLimit(-math.inf, math.inf), "svsa": InputLimit(-math.inf, math.inf, min_abs=1e-8),
 }
 ANALYSIS_LIMITS = {
     "bump_mm": InputLimit(0, 200), "droop_mm": InputLimit(0, 200),
@@ -65,12 +67,11 @@ FIELD_LIMITS = {"vehicle": VEHICLE_LIMITS, "front": AXLE_LIMITS,
                 "rear": AXLE_LIMITS, "analysis": ANALYSIS_LIMITS}
 NAME_MAX_LENGTH = 128
 
-ANTI_FIELDS = ("anti_dive", "anti_lift", "anti_squat")
 INPUT_STEPS = {
     "track_front": .005, "track_rear": .005, "fvsa": .005, "rc_height": .005,
     "kpi_deg": .5, "scrub_radius": .001, "lower_mount_x": .005, "upper_mount_x": .005,
     "caster_deg": .5, "mechanical_trail": .001,
-    **dict.fromkeys(ANTI_FIELDS, .05),
+    "anti": .05,
 }
 
 
@@ -88,11 +89,6 @@ def round_design_input(group, key, value):
         return round_to_step(value, step)
     return value
 
-
-def round_anti_metrics(metrics):
-    for key, value in metrics.items():
-        if key.startswith("anti_") and key.endswith("_pct"):
-            metrics[key] = round_to_step(value, 5)
 
 # Hardpoint XYZ and arm-mount X requests have no artificial numeric bounds.
 # A blank/null arm-mount X selects the geometry's automatically solved extremum.
@@ -119,6 +115,6 @@ def range_hint(group, key, unit):
     if relation:
         text += "；" + relation
     if key in INPUT_STEPS:
-        step = "5%" if key in ANTI_FIELDS else f"{INPUT_STEPS[key]:g} {unit}"
+        step = "5%" if key == "anti" else f"{INPUT_STEPS[key]:g} {unit}"
         text += "；級距 " + step
     return text
