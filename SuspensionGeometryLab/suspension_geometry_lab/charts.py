@@ -68,6 +68,7 @@ class LabChart(Chart):
         if not spec or "world_lines" not in spec:
             self._draw_flat()
             if spec:
+                self.draw_lap_distribution(spec, lambda point: point)
                 if self.view is not None and hasattr(self, "bounds"):
                     self.draw_annotations(spec, lambda point: point)
                 self.draw_current_status(spec)
@@ -105,6 +106,35 @@ class LabChart(Chart):
             w = max(self.canvas.winfo_width(), 300)
             l, t, r, b = self.bounds if self.view is not None and hasattr(self, "bounds") else (0, 40, w, 100)
             self.text(r-8, t+15, spec["current_status"], "#fbbf24", 10, "e")
+
+    def draw_lap_distribution(self, spec, project):
+        if "lap_points" not in spec:
+            return
+        points = spec["lap_points"]
+        total = spec["lap_total"]
+        color = "#f8fafc"
+        status = f"LapSim · {len(points):,} / {total:,} 筆"
+        if len(points) < total:
+            status += f"（略過 {total - len(points):,} 筆）"
+        self.text(max(self.canvas.winfo_width(), 300)-20, 22, status, color, 10, "e")
+        if self.view is None:
+            return
+        l, t, r, b = self.bounds
+        xmin, xmax, ymin, ymax = self.view
+        outline, radius = BG, 2.5
+        occupied = set()
+        for point in points:
+            x, y = project(point)
+            px = l+(x-xmin)/(xmax-xmin)*(r-l)
+            py = b-(y-ymin)/(ymax-ymin)*(b-t)
+            if not (l <= px <= r and t <= py <= b):
+                continue
+            pixel = round(px/2), round(py/2)
+            if pixel not in occupied:
+                occupied.add(pixel)
+                self.canvas.create_oval(px-radius, py-radius, px+radius, py+radius,
+                                        fill=color, outline=outline, width=radius/2)
+                self.circles.append((px, py, radius, color, False, outline, "LapSim"))
 
     def draw_annotations(self, spec, project):
         l, t, r, b = self.bounds
@@ -156,6 +186,7 @@ class LabChart(Chart):
         if not points:
             self.text(w/2, h/2, "此範圍沒有可達的幾何姿態")
             self.view = None
+            self.draw_lap_distribution(spec, lambda point: point)
             self.draw_current_status(spec)
             return
         ranges = [(min(p[i] for p in points), max(p[i] for p in points)) for i in range(3)]
@@ -203,6 +234,7 @@ class LabChart(Chart):
                 self.text(x+5, y-9, f"{value:.4g}", color, 8)
         self.text(w-20, 48, f"Z: {ranges[2][0]:.5g} → {ranges[2][1]:.5g}", "#cbd5e1", 9, "e")
         self.text(w-20, h-18, "拖曳旋轉 · 滾輪縮放 · 雙擊重設；缺格表示無解 / 無有限交點", "#94a3b8", 9, "e")
+        self.draw_lap_distribution(spec, lambda point: self.project(norm(point), "Iso"))
         for marker in spec.get("markers", []):
             position = marker["position"]
             bottom = [position[0], position[1], ranges[2][0]]
@@ -225,7 +257,7 @@ class LabChart(Chart):
             polygons.append(f'<polygon points="{xy}" fill="{color}" stroke="#334155" stroke-width="0.6"/>')
         lines = svg.splitlines()
         circles = [f'<circle cx="{x:.2f}" cy="{y:.2f}" r="{radius}" fill="{"none" if hollow else color}" '
-                   f'stroke="{outline}" stroke-width="2" data-label="{html.escape(name, quote=True)}"/>'
+                   f'stroke="{outline}" stroke-width="{min(2, radius/2):g}" data-label="{html.escape(name, quote=True)}"/>'
                    for x, y, radius, color, hollow, outline, name in self.circles]
         return "\n".join(lines[:2]+polygons+lines[2:-1]+circles+lines[-1:])
 
@@ -261,5 +293,5 @@ class LabChart(Chart):
                 draw.text(scaled, content, fill=color, font=font, anchor="rm" if anchor == "e" else "lm" if anchor == "w" else "mm")
         for x, y, radius, color, hollow, outline, name in self.circles:
             draw.ellipse([(x-radius)*factor, (y-radius)*factor, (x+radius)*factor, (y+radius)*factor],
-                         fill=None if hollow else color, outline=outline, width=2*factor)
+                         fill=None if hollow else color, outline=outline, width=round(min(2, radius/2)*factor))
         image.save(path)

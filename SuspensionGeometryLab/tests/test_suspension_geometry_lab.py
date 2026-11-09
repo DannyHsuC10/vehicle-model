@@ -135,6 +135,26 @@ class MotionTests(unittest.TestCase):
     def setUp(self):
         self.engine = Engine(default_project())
 
+    def test_lap_wheel_center_inputs_reproduce_contact_travel_geometry(self):
+        for axle in ("front", "rear"):
+            solver = self.engine.fv[axle]
+            pose = solver.solve(16, -10, wheel_center=True)
+            centers = [pose["points"][side+"_wheel_center"][1] for side in ("L", "R")]
+            np.testing.assert_allclose((np.array(centers)-solver.zero["wheel_center"][1])*1000,
+                                       [16, -10], atol=1e-7)
+            m = pose["metrics"]
+            self.assertGreater(m["travel_left_mm"], 16)
+            contact = solver.solve(m["travel_left_mm"], m["travel_right_mm"])["metrics"]
+            for metric in ("camber_left_deg", "camber_gain_right_deg_per_mm", "rc_y_prime_mm"):
+                self.assertAlmostEqual(m[metric], contact[metric], places=6)
+        pose = self.engine.solve_sv(12, -8, wheel_center=True)
+        for axle, travel in (("front", 12), ("rear", -8)):
+            center_z = self.engine.sv[axle].template.wheel_center[1]
+            self.assertAlmostEqual((pose["points"][axle+"_center"][1]-center_z)*1000, travel, places=7)
+        m = pose["metrics"]
+        contact = self.engine.solve_sv(m["travel_front_mm"], m["travel_rear_mm"])["metrics"]
+        self.assertAlmostEqual(m["anti_brake_front_pct"], contact["anti_brake_front_pct"], places=6)
+
     def test_default_scene_matches_authoritative_static_scene_exactly(self):
         from suspension_geometry_lab.project import static_objects
         baseline = build_wireframe_scene(*static_objects(default_project()))
@@ -403,6 +423,54 @@ class GuiTests(unittest.TestCase):
         self.assertTrue(panel.ready_for_export, self.app.status.get())
         self.assertIsNone(panel.error)
         self.app.update()
+
+    def test_lap_csv_import_toggle_and_cross_page_overlay(self):
+        from suspension_geometry_lab.lap_data import TRAVEL_COLUMNS
+        panel = self.app.panels["front"]
+        panel.plot.set(dict(PLOTS["front"])["camber_left_deg"])
+        panel.request()
+        self.wait(panel)
+        self.assertTrue(panel.lap_check.instate(["disabled"]))
+        view = panel.chart.view.copy()
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as tmp:
+            path = Path(tmp) / "lap_result.csv"
+            header = ",".join(TRAVEL_COLUMNS)
+            path.write_text(header + "\n-16,10,-8,4\n-100,0,-100,0\n", encoding="utf-8-sig")
+            with patch("suspension_geometry_lab.gui.filedialog.askopenfilename", return_value=str(path)):
+                self.app.open_lap()
+            self.wait(panel)
+            self.assertEqual(self.app.lap_travels[0], (16, -10, 8, -4))
+            self.assertEqual(panel.chart.spec["lap_total"], 2)
+            self.assertEqual(len(panel.chart.spec["lap_points"]), 1)
+            self.assertIn('data-label="LapSim"', panel.chart.svg())
+            panel.lap_check.invoke()
+            self.assertNotIn("lap_points", panel.chart.spec)
+            self.assertNotIn('data-label="LapSim"', panel.chart.svg())
+            panel.lap_check.invoke()
+            self.assertEqual(panel.chart.view, view)
+            self.assertIn('data-label="LapSim"', panel.chart.svg())
+            path.write_text(header + "\nNaN,0,0,0\n", encoding="utf-8")
+            with patch("suspension_geometry_lab.gui.messagebox.showerror") as error:
+                self.app.import_lap(path)
+            error.assert_called_once()
+            self.assertEqual(self.app.lap_travels[0], (16, -10, 8, -4))
+
+        for key, plot in (("rear", "rc_map"), ("sv", "anti_brake_front_pct")):
+            panel = self.app.panels[key]
+            self.app.notebook.select(panel)
+            self.app.update()
+            panel.plot.set(dict(PLOTS[key])[plot])
+            panel.request()
+            self.wait(panel)
+            self.assertEqual(len(panel.chart.spec["lap_points"]), 1)
+            self.assertIn('data-label="LapSim"', panel.chart.svg())
+        side = self.app.engine.solve_sv(3, 2, wheel_center=True)["metrics"]
+        np.testing.assert_allclose(panel.chart.spec["lap_points"][0],
+                                   [side["ride_height_front_mm"], side["ride_height_rear_mm"],
+                                    side["anti_brake_front_pct"]])
+        panel.lap_check.invoke()
+        for key in ("front", "rear", "sv"):
+            self.assertNotIn("lap_points", self.app.panels[key].chart.spec)
 
     def test_import_prompts_for_missing_cells_and_commits_only_valid_repair(self):
         previous = self.app.project

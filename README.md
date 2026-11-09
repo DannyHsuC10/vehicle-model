@@ -6,6 +6,7 @@
 | --- | --- | --- |
 | SuspensionGeometryLab：懸吊幾何工作台 | 雙擊 `SuspensionGeometryLab/Start-SuspensionGeometryLab.bat` | [操作說明](SuspensionGeometryLab/README.md) |
 | VehicleLab：整車分析工具 | 雙擊 `VehicleLab/Start-VehicleLab.bat` | [操作說明](VehicleLab/README.md) |
+| LapSimLab：圈速模擬 | 雙擊 `LapSimLab/Start-LapSimLab.bat` | [操作說明](LapSimLab/README.md) |
 | SuspensionDynamicsLab：懸吊彈簧阻尼模型分析 | 雙擊 `SuspensionDynamicsLab/Start-SuspensionDynamicsLab.bat` | [操作說明](SuspensionDynamicsLab/README.md) |
 | VehicleInitialSizingLab：車輛初步設計與 Markdown 報告 | 雙擊 `VehicleInitialSizingLab/Start-VehicleInitialSizingLab.bat` | [操作說明](VehicleInitialSizingLab/README.md) |
 
@@ -13,7 +14,7 @@
 
 SuspensionGeometryLab、VehicleLab 和 SuspensionDynamicsLab 各有 `tests/` 與 `Start-Tests.bat`。雙擊該工具內的 `Start-Tests.bat` 會執行完整測試（含原生視窗），也可在該工具資料夾執行 `python -m unittest discover -s tests -v`。
 
-各套工具皆需要 Python 3.10+ 與 Tkinter。VehicleInitialSizingLab 另以 WebView2 顯示 Markdown 和 LaTeX。SuspensionGeometryLab 與 SuspensionDynamicsLab 另需要 NumPy，PNG 匯出需要 Pillow。
+各套工具皆需要 Python 3.10+ 與 Tkinter。VehicleInitialSizingLab 另以 WebView2 顯示 Markdown 和 LaTeX。SuspensionGeometryLab、SuspensionDynamicsLab 與 LapSimLab 另需要 NumPy。既有工具的 PNG 匯出需要 Pillow。
 
 既有車輛專案位於 `VehicleLab/projects/vehicle_project.json`；懸吊專案可存入 `SuspensionGeometryLab/projects/`。兩套工具的 JSON 格式不同，請各自開啟對應的專案。
 

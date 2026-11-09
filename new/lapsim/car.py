@@ -1,30 +1,19 @@
 from pathlib import Path
-import os
 import pandas as pd
 from scipy.interpolate import interp1d
 
 import numpy as np
-from aero.Aero import ModalAeroModel
+from Aero import DEFAULT_AERO_JSON, ModalAeroModel
 
-# 取得目前這個 .py 檔案的絕對路徑
-base_path = Path(__file__).resolve().parent
-
-# 組合資料路徑（以目前檔案為基準）
-motor_data_path = base_path  / "power_brake_sys" / "excel" / "motor_speed_vs_torque.xlsx"
+motor_data_path = (
+    Path(__file__).resolve().parents[2] / "input_data" / "Electrical" / "motor_speed_vs_torque.csv"
+)
 
 g = 9.81
 
-def datasetup(file_name): 
-
-    df_raw = pd.read_excel(file_name, header=None)
-    name_a = df_raw.iloc[0, 0]  # A1
-    name_b = df_raw.iloc[0, 1]  # B1
-    df = pd.read_excel(file_name)
-    # 取出欄位
-    a_array = df[name_a].values
-    b_array = df[name_b].values
-    lookup = interp1d(a_array, b_array, bounds_error=False, fill_value="extrapolate")
-    return lookup
+def datasetup(file_name):
+    df = pd.read_csv(file_name)
+    return interp1d(df["speed"], df["torque"], bounds_error=False, fill_value="extrapolate")
 
 motor_torque_lookup = datasetup(motor_data_path)
 
@@ -34,7 +23,7 @@ class Car_simplify:
     Minimal vehicle parameters used by theoretical_lap_simulator.py.
     """
 
-    def __init__(self):
+    def __init__(self, aero_path: str | Path = DEFAULT_AERO_JSON):
         
         self.tf = 1.25 # front_track
         self.tr = 1.24 # rear_track
@@ -69,30 +58,10 @@ class Car_simplify:
         self.F_diver = 500.0  # backward compatible name used by brake.py
 
         # =================================(空力系統)
-        self.aero = ModalAeroModel(
-            rho=1.225,
-            area=1.2,
-
-            CL0=-2.4,
-            CD0=1.8,
-
-            Kh=-5.0,
-            Kp=25.0,
-            Kr=5.0,
-            Khh=50.0,
-            Kpp=40.0,
-
-            Kd_h=0.0,
-            Kd_p=0.0,
-            Kd_r=0.0,
-
-            front_balance=0.45,
-            K_balance_pitch=0.20,
-            K_balance_roll=0.10,
-
+        self.aero = ModalAeroModel.from_json(
+            aero_path,
             wheelbase=self.l,
             track=(self.tf + self.tr) / 2.0,
-            cop_z=0.0
         )
 
         # =========================================== 穩態懸吊剛性

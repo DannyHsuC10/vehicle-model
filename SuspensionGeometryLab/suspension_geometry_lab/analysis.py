@@ -124,6 +124,33 @@ def motion_markers(page, points):
     return markers
 
 
+def plot_axes(page, mode, metrics):
+    if page == "we":
+        keys = "steer_deg", "caster_deg"
+    elif mode == "pose":
+        keys = "heave_mm", "pitch_deg" if page == "sv" else "roll_deg"
+    elif page == "sv":
+        keys = "ride_height_front_mm", "ride_height_rear_mm"
+    else:
+        keys = "travel_left_mm", "travel_right_mm"
+    return [metrics.get(key) for key in keys]
+
+
+def with_lap_distribution(spec, page, plot, mode, lap):
+    if lap is None:
+        return spec
+    points = []
+    for metrics in lap["rows"]:
+        if plot in ("rc_map", "pc_map"):
+            prefix = "rc" if plot == "rc_map" else "pc"
+            position = [metrics.get(prefix+"_x_prime_mm"), metrics.get(prefix+"_y_prime_mm")]
+        else:
+            position = [*plot_axes(page, mode, metrics), metrics.get(plot)]
+        if all(value is not None and np.isfinite(value) for value in position):
+            points.append([float(value) for value in position])
+    return {**spec, "lap_points": points, "lap_total": lap["total"]}
+
+
 def with_current_position(spec, page, plot, state, mapping):
     """Annotate solved pose values, independently of the cached sweep grid."""
     spec = {**spec, "markers": [], "current_status": ""}
@@ -138,14 +165,7 @@ def with_current_position(spec, page, plot, state, mapping):
     def fmt(value):
         return f"{0 if abs(value) < 1e-9 else value:.5g}"
 
-    if page == "we":
-        axes = [metrics.get("steer_deg"), metrics.get("caster_deg")]
-    elif mapping["mode"] == "pose":
-        axes = [metrics.get("heave_mm"), metrics.get("pitch_deg" if page == "sv" else "roll_deg")]
-    elif page == "sv":
-        axes = [metrics.get("ride_height_front_mm"), metrics.get("ride_height_rear_mm")]
-    else:
-        axes = [metrics.get("travel_left_mm"), metrics.get("travel_right_mm")]
+    axes = plot_axes(page, mapping["mode"], metrics)
     if not finite(axes):
         spec["current_status"] = "目前座標無有效定義"
         return spec
@@ -207,7 +227,8 @@ def with_current_position(spec, page, plot, state, mapping):
     return spec
 
 
-def make_plot(page, plot, state=None, mapping=None, engine=None, groups=None, show_static_references=True):
+def make_plot(page, plot, state=None, mapping=None, engine=None, groups=None, show_static_references=True,
+              *, lap=None):
     if page == "static":
         visible = groups or {"front": True, "rear": True, "sv": True}
         lines = [line(l.points, l.group, color=l.color, dash=l.dash)
@@ -260,19 +281,22 @@ def make_plot(page, plot, state=None, mapping=None, engine=None, groups=None, sh
     if plot in ("rc_map", "pc_map"):
         xkey, ykey = ("rc_x_prime_mm", "rc_y_prime_mm") if plot == "rc_map" else ("pc_x_prime_mm", "pc_y_prime_mm")
         paths = list(mapping["grid"]) + list(zip(*mapping["grid"]))
-        return with_current_position({"title": title, "xlabel": "x′ (mm)", "ylabel": "y′ (mm)", "equal": True,
+        spec = {"title": title, "xlabel": "x′ (mm)", "ylabel": "y′ (mm)", "equal": True,
                 "series": [{"name": "Mapping rows" if i < len(mapping["grid"]) else "Mapping columns",
                             "x": [r.get(xkey) for r in row], "y": [r.get(ykey) for r in row],
-                            "color": "#38bdf8" if i < len(mapping["grid"]) else "#a78bfa"} for i, row in enumerate(paths)]}, page, plot, state, mapping)
-    metric = "wheel_tilt_deg" if plot == "caster_surface" else plot
-    mesh = [[[r["axis_x"], r["axis_y"], r.get(metric)] for r in row] for row in mapping["grid"]]
-    zlabel = {"wheel_tilt_deg": "Wheel tilt (deg)", "rc_y_prime_mm": "RC y′ (mm)", "rc_x_prime_mm": "RC x′ (mm)",
-              "pc_y_prime_mm": "PC y′ (mm)", "pc_x_prime_mm": "PC x′ (mm)",
-              "camber_left_deg": "Camber L (deg)", "camber_right_deg": "Camber R (deg)",
-              "camber_gain_left_deg_per_mm": "Camber gain L (deg/mm)",
-              "camber_gain_right_deg_per_mm": "Camber gain R (deg/mm)"}.get(metric, metric.replace("_", " "))
-    return with_current_position({"title": title, "mesh": mesh, "projection": "Iso", "xlabel": mapping["xlabel"],
-            "ylabel": mapping["ylabel"], "zlabel": zlabel}, page, plot, state, mapping)
+                            "color": "#38bdf8" if i < len(mapping["grid"]) else "#a78bfa"} for i, row in enumerate(paths)]}
+    else:
+        metric = "wheel_tilt_deg" if plot == "caster_surface" else plot
+        mesh = [[[r["axis_x"], r["axis_y"], r.get(metric)] for r in row] for row in mapping["grid"]]
+        zlabel = {"wheel_tilt_deg": "Wheel tilt (deg)", "rc_y_prime_mm": "RC y′ (mm)", "rc_x_prime_mm": "RC x′ (mm)",
+                  "pc_y_prime_mm": "PC y′ (mm)", "pc_x_prime_mm": "PC x′ (mm)",
+                  "camber_left_deg": "Camber L (deg)", "camber_right_deg": "Camber R (deg)",
+                  "camber_gain_left_deg_per_mm": "Camber gain L (deg/mm)",
+                  "camber_gain_right_deg_per_mm": "Camber gain R (deg/mm)"}.get(metric, metric.replace("_", " "))
+        spec = {"title": title, "mesh": mesh, "projection": "Iso", "xlabel": mapping["xlabel"],
+                "ylabel": mapping["ylabel"], "zlabel": zlabel}
+    spec = with_lap_distribution(spec, page, plot, mapping["mode"], lap)
+    return with_current_position(spec, page, plot, state, mapping)
 
 
 def static_point_rows(engine):

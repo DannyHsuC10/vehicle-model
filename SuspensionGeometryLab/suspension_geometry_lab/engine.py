@@ -7,6 +7,7 @@ No Matplotlib, SciPy, global mutable solvers, or car.py design defaults.
 """
 import copy
 import math
+from functools import cached_property
 
 import numpy as np
 
@@ -45,36 +46,53 @@ def rotate2(angle):
     return np.array([[c, -s], [s, c]])
 
 
-def scalar_solve(function, target, origin, span):
-    """Find the nearest reachable branch, bisect and verify the actual residual."""
+def sample_motion_path(at, origin, span):
+    """Cache the branch search grid for both travel reference points."""
+    samples = []
+    for coordinate in np.linspace(origin - span, origin + span, 81):
+        try:
+            state = at(coordinate)
+        except (Unreachable, FloatingPointError):
+            state = {}
+        samples.append((coordinate, state))
+    return samples
+
+
+def scalar_solve(at, point, target, origin, samples):
+    """Refine the nearest reachable bracket and verify the actual residual."""
     def evaluate(x):
         try:
-            value = float(function(x)) - target
+            value = float(at(x)[point][1]) - target
             return value if math.isfinite(value) else None
         except (Unreachable, FloatingPointError):
             return None
     zero = evaluate(origin)
     if zero is not None and abs(zero) < 1e-11:
         return origin
-    samples = [(x, evaluate(x)) for x in np.linspace(origin - span, origin + span, 81)]
-    brackets = [(a, b) for (a, fa), (b, fb) in zip(samples, samples[1:])
-                if fa is not None and fb is not None and fa * fb <= 0]
-    brackets.sort(key=lambda pair: abs(sum(pair) / 2 - origin))
-    for lo, hi in brackets:
-        flo = evaluate(lo)
-        for _ in range(45):
-            mid = (lo + hi) / 2
+    values = [(x, float(s[point][1]) - target if point in s else math.nan) for x, s in samples]
+    brackets = [(a, b, fa, fb) for (a, fa), (b, fb) in zip(values, values[1:])
+                if math.isfinite(fa) and math.isfinite(fb) and fa * fb <= 0]
+    brackets.sort(key=lambda bracket: abs((bracket[0] + bracket[1]) / 2 - origin))
+    for lo, hi, flo, fhi in brackets:
+        if abs(flo) < 1e-11:
+            return lo
+        if abs(fhi) < 1e-11:
+            return hi
+        for step in range(90):
+            # Try linear interpolation and alternate with bisection to keep
+            # shrinking the same bracket even on a strongly curved path.
+            mid = lo - flo * (hi - lo) / (fhi - flo) if step % 2 == 0 else (lo + hi) / 2
             fm = evaluate(mid)
             if fm is None:
                 break
             if abs(fm) < 1e-11:
                 return mid
             if flo * fm <= 0:
-                hi = mid
+                hi, fhi = mid, fm
             else:
                 lo, flo = mid, fm
         else:
-            if abs(evaluate(mid)) < 1e-8:
+            if abs(fm) < 1e-8:
                 return mid
     raise Unreachable(f"要求的行程 {target * 1000:.3f} mm 在目前幾何分支不可達。")
 
@@ -170,20 +188,33 @@ class FVMotion:
         result["wheel"] = offsets @ matrix.T + wc
         return result
 
-    def side(self, travel_mm, left=False):
+    @cached_property
+    def motion_samples(self):
+        return sample_motion_path(self.at_angle, self.theta0, 1.15)
+
+    def side(self, travel_mm, left=False, *, wheel_center=False, use_cache=True):
+        point = "wheel_center" if wheel_center else "gnd"
+        use_cache = use_cache and not wheel_center
         key = round(float(travel_mm), 9)
-        if key not in self.cache:
-            target = travel_mm / 1000 + self.zero["gnd"][1]
-            theta = scalar_solve(lambda t: self.at_angle(t)["gnd"][1], target, self.theta0, 1.15)
-            self.cache[key] = self.at_angle(theta)
-        state = dict(self.cache[key])
+        state = self.cache.get(key) if use_cache else None
+        if state is None:
+            target = travel_mm / 1000 + self.zero[point][1]
+            theta = scalar_solve(self.at_angle, point, target, self.theta0, self.motion_samples)
+            state = self.at_angle(theta)
+            if use_cache:
+                self.cache[key] = state
+        state = dict(state)
         if left:
             state = {k: v * [-1, 1] if isinstance(v, np.ndarray) else -v for k, v in state.items() if v is not None}
             state.setdefault("IC", None)
         return state
 
-    def solve(self, left_mm, right_mm, gains=True):
-        left, right = self.side(left_mm, True), self.side(right_mm)
+    def solve(self, left_mm, right_mm, gains=True, *, wheel_center=False):
+        left = self.side(left_mm, True, wheel_center=wheel_center)
+        right = self.side(right_mm, wheel_center=wheel_center)
+        if wheel_center:
+            left_mm, right_mm = ((s["gnd"][1] - self.zero["gnd"][1])*1000 for s in (left, right))
+            check_pose_travel((left_mm, right_mm), self.travel_bounds)
         def cambers(l, r):
             g = r["gnd"] - l["gnd"]
             roll = math.atan2(g[1], g[0])
@@ -202,8 +233,8 @@ class FVMotion:
                 try:
                     values = []
                     for delta in (-.01, .01):
-                        l = self.side(left_mm + delta, True) if is_left else left
-                        r = right if is_left else self.side(right_mm + delta)
+                        l = self.side(left_mm + delta, True, use_cache=not wheel_center) if is_left else left
+                        r = right if is_left else self.side(right_mm + delta, use_cache=not wheel_center)
                         values.append(cambers(l, r)[0 if is_left else 1])
                     metrics[f"camber_gain_{label}_deg_per_mm"] = (values[1]-values[0])/.02
                 except Unreachable:
@@ -313,11 +344,17 @@ class SVMotion:
                 "kt": transform(t.kingpin_top), "ic": intersection(upper, upper+nu, lower, lower+nl),
                 "angle": angle}
 
-    def side(self, travel_mm):
+    @cached_property
+    def motion_samples(self):
+        return sample_motion_path(self.at_al, 0., .5)
+
+    def side(self, travel_mm, *, wheel_center=False):
+        if wheel_center:
+            target = self.template.wheel_center[1] + travel_mm/1000
+            return self.at_al(scalar_solve(self.at_al, "center", target, 0., self.motion_samples))
         key = round(float(travel_mm), 9)
         if key not in self.cache:
-            offset = scalar_solve(lambda x: self.at_al(x)["contact"][1], travel_mm/1000,
-                                  0., .5)
+            offset = scalar_solve(self.at_al, "contact", travel_mm/1000, 0., self.motion_samples)
             self.cache[key] = self.at_al(offset)
         return self.cache[key]
 
@@ -369,9 +406,13 @@ class Engine:
             self._pitch_angle_limit = float(max(angles))
         return self._pitch_angle_limit
 
-    def solve_sv(self, front_mm, rear_mm):
-        states = {"front": self.sv["front"].side(front_mm), "rear": self.sv["rear"].side(rear_mm)}
+    def solve_sv(self, front_mm, rear_mm, *, wheel_center=False):
+        states = {"front": self.sv["front"].side(front_mm, wheel_center=wheel_center),
+                  "rear": self.sv["rear"].side(rear_mm, wheel_center=wheel_center)}
         f, r = states["front"], states["rear"]
+        if wheel_center:
+            front_mm, rear_mm = (s["contact"][1]*1000 for s in (f, r))
+            check_pose_travel((front_mm, rear_mm), self.travel_bounds)
         ground = r["contact"] - f["contact"]
         frame = contact_frame(f["contact"], r["contact"])
         pitch = math.atan2(ground[1], ground[0])

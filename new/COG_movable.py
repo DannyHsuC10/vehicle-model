@@ -7,16 +7,14 @@ import numpy as np
 import pandas as pd
 from openpyxl import load_workbook
 
-from app.analysis_result import AnalysisResult
-
 TITLE = "COG_movable"
 DESCRIPTION = "由 Excel 質量分布計算重心、簧上／簧下質量與慣量。"
 PLUGIN_ID = "cog_movable"
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 SOURCE_FILES = {
-    "sprung": "data/input_data/Center_of_gravity_LP03_sprung.xlsx",
-    "unsprung_front": "data/input_data/Center_of_gravity_LP03_unsprungfront.xlsx",
-    "unsprung_rear": "data/input_data/Center_of_gravity_LP03_unsprungrear.xlsx",
+    "sprung": "input_data/body/Center_of_gravity_LP03_sprung.xlsx",
+    "unsprung_front": "input_data/body/Center_of_gravity_LP03_unsprungfront.xlsx",
+    "unsprung_rear": "input_data/body/Center_of_gravity_LP03_unsprungrear.xlsx",
 }
 INPUT_FILES = tuple(PROJECT_DIR / path for path in SOURCE_FILES.values())
 PARAMETER_DEFAULTS = {
@@ -166,6 +164,8 @@ def calculate(parameters):
 
 
 def main(parameters):
+    from app.analysis_result import AnalysisResult
+
     frame, summary, outputs = calculate(parameters)
     center = np.array([outputs[f"cog_total_{a}_m"] for a in "xyz"])
     relative = frame[["x_m", "y_m", "z_m"]].to_numpy() - center

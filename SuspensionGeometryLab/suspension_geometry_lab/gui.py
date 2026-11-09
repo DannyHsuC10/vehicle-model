@@ -1,5 +1,6 @@
 """Standalone five-page native workbench; workers never access Tk widgets."""
 import copy
+import csv
 from pathlib import Path
 import queue
 import threading
@@ -13,6 +14,7 @@ from .project_import import fill_import_project, read_import_project
 from .engine import Engine, Unreachable
 from .analysis import ANTI_RESULT_LABELS, PAGES, PLOTS, NOTES, calculate_mapping, make_plot, static_point_rows
 from .charts import LabChart
+from .lap_data import LAP_PAGES, calculate_lap_metrics, read_lap_travels
 from .export import STEP_PAGES, point_rows, write_report, write_csv, write_step
 from . import hardpoints
 from .input_limits import FIELD_LIMITS, NAME_MAX_LENGTH, range_hint, round_design_input
@@ -517,6 +519,15 @@ class Panel(ttk.Frame):
             row.pack(fill="x")
             ttk.Checkbutton(row, text="顯示 IC / 力線參考", variable=self.construction, command=self.render).pack(side="left")
             ttk.Button(row, text="回到零姿態", command=self.zero).pack(side="left", padx=12)
+        if key in LAP_PAGES:
+            row = ttk.Frame(right, padding=(8, 2))
+            row.pack(fill="x")
+            ttk.Button(row, text="匯入 LapSim CSV", command=app.open_lap).pack(side="left")
+            self.lap_check = ttk.Checkbutton(row, text="顯示 LapSim 行程分布",
+                                             variable=app.show_lap, command=app.toggle_lap)
+            self.lap_check.pack(side="left", padx=8)
+            self.lap_check.state(["disabled"])
+            ttk.Label(row, textvariable=app.lap_source, foreground="#475569").pack(side="left", fill="x", expand=True)
         self.sliders, self.slider_labels = [], []
         for i in range(0 if key == "static" else 1 if key == "we" else 2):
             row = ttk.Frame(right, padding=(8, 2))
@@ -672,6 +683,9 @@ class Panel(ttk.Frame):
         values = tuple(v.get() for v in self.controls)
         key, plot_key = self.key, self.plot_key
         need_map = force_mapping or (key != "static" and plot_key != "motion")
+        lap_travels = self.app.lap_travels
+        lap_cache = self.app.lap_cache
+        need_lap = lap_travels and self.app.show_lap.get() and key in LAP_PAGES and plot_key != "motion"
         self.pending_export = pending_export
         self.ready_for_export = False
         self.app.status.set(f"{PAGES[key]} · 計算中…")
@@ -701,6 +715,12 @@ class Panel(ttk.Frame):
                         mapping = calculate_mapping(engine, key, mode, axle, cancelled)
                         if mapping is not None and not cancelled():
                             cache[cache_key] = mapping
+                if need_lap and key not in lap_cache and not cancelled():
+                    lap_cancelled = lambda: (self.app.revision != revision or self.app.closing
+                                             or self.app.lap_travels is not lap_travels)
+                    lap = calculate_lap_metrics(engine, key, lap_travels, lap_cancelled)
+                    if lap is not None and not lap_cancelled():
+                        lap_cache[key] = lap
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
             if not cancelled():
@@ -737,7 +757,8 @@ class Panel(ttk.Frame):
             return
         spec = make_plot(self.key, self.plot_key, self.state, self.mapping, self.app.engine,
                          {k: v.get() for k, v in self.groups.items()},
-                         show_static_references=self.static_references.get())
+                         show_static_references=self.static_references.get(),
+                         lap=self.app.lap_cache.get(self.key) if self.app.show_lap.get() else None)
         if spec and "world_lines" in spec and self.key != "static" and not self.construction.get():
             spec["world_lines"] = [p for p in spec["world_lines"] if not p["construction"]]
         chart_key = (self.plot_key, self.mode.get(), self.axle.get())
@@ -770,6 +791,11 @@ class App(tk.Tk):
         self.path = None
         self.editor = None
         self.mapping_cache = {}
+        self.lap_cache = {}
+        self.lap_travels = ()
+        self.lap_path = None
+        self.show_lap = tk.BooleanVar(value=False)
+        self.lap_source = tk.StringVar(value="尚未匯入")
         self.jobs, self.results = queue.Queue(), queue.Queue()
         header = ttk.Frame(self, padding=(16, 12))
         header.pack(fill="x")
@@ -839,6 +865,7 @@ class App(tk.Tk):
         self.project, self.engine = copy.deepcopy(engine.project), engine
         self.revision += 1
         self.mapping_cache = {}
+        self.lap_cache = {}
         self.dirty = mark_dirty
         self.project_label.configure(text=self.project["name"]+(" *" if self.dirty else ""))
         for panel in self.panels.values():
@@ -892,6 +919,39 @@ class App(tk.Tk):
         )
         if path:
             self.import_project(path)
+
+    def open_lap(self):
+        path = filedialog.askopenfilename(
+            parent=self, title="開啟 LapSimLab lap_result.csv",
+            initialdir=self.lap_path.parent if self.lap_path else self.project_dialog_dir(),
+            filetypes=[("LapSimLab CSV", "*.csv")],
+        )
+        if path:
+            self.import_lap(path)
+
+    def import_lap(self, path):
+        try:
+            travels = read_lap_travels(path)
+        except (OSError, ValueError, csv.Error) as exc:
+            messagebox.showerror("無法匯入 LapSim CSV", str(exc), parent=self)
+            return
+        self.lap_travels = travels
+        self.lap_path = Path(path)
+        self.lap_cache = {}
+        self.show_lap.set(True)
+        self.lap_source.set(f"{self.lap_path.name} · {len(travels):,} 筆")
+        for key in LAP_PAGES:
+            self.panels[key].lap_check.state(["!disabled"])
+        self.status.set(f"已匯入 {self.lap_path.name} · {len(travels):,} 筆")
+        self.toggle_lap()
+
+    def toggle_lap(self):
+        for key in LAP_PAGES:
+            self.panels[key].render()
+        panel = self.active
+        if (self.show_lap.get() and panel.key in LAP_PAGES and panel.plot_key != "motion"
+                and panel.key not in self.lap_cache):
+            panel.request()
 
     def import_project(self, path):
         try:

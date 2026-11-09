@@ -3,6 +3,8 @@
 Analysis ranges and plotting/UI options live in analysis_settings.py.
 """
 
+from pathlib import Path
+
 import numpy as np
 
 
@@ -28,7 +30,7 @@ class Car:
         # ------------------------------------------------------------------
         # Tire parameters
         # ------------------------------------------------------------------
-        self.tir = "tire.tir"  # Tire parameter filename, if used by a model
+        self.tir = str(Path(__file__).resolve().parents[2] / "input_data" / "tire" / "tire.tir")
         self.free_radius = 205.73999999999998 / 1000  # Unloaded radius [m]
         self.K_tire = 80.185 * 1000  # Vertical tire stiffness [N/m] (W8)
         self.tire_width = 190.5 / 1000  # Tire section width [m]
