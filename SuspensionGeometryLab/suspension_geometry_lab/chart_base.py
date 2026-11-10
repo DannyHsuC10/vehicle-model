@@ -1,4 +1,5 @@
 """Offline Tk canvas charts with pan/zoom, SVG and optional Pillow PNG export."""
+from bisect import bisect_right
 import html
 import math
 import tkinter as tk
@@ -40,6 +41,10 @@ class Chart(ttk.Frame):
         self.canvas.create_line(*coords,fill=color,width=width,dash=dash)
         self.primitives.append(("line",list(coords),color,width,tuple(dash)))
 
+    def rectangle(self, coords, fill, outline):
+        self.canvas.create_rectangle(*coords, fill=fill, outline=outline, width=1)
+        self.primitives.append(("rect", coords, fill, 1, outline))
+
     def text(self,x,y,text,color="#cbd5e1",size=10,anchor="center"):
         self.canvas.create_text(x,y,text=str(text),fill=color,font=("Microsoft JhengHei UI",size),anchor=anchor)
         self.primitives.append(("text",[x,y],color,size,str(text),anchor))
@@ -62,6 +67,8 @@ class Chart(ttk.Frame):
             self.text(width/2,height/2,"設定參數後按「計算」",size=15)
             return
         series=spec.get("series",[])
+        bin_edges = spec.get("bin_edges")
+        hidden_series = spec.get("hidden_series", ())
         overlays=[]
         if "segments" in spec:
             projection=spec.get("projection","Iso")
@@ -94,10 +101,14 @@ class Chart(ttk.Frame):
         legend_slots=[(SEGMENT_LABELS.get(kind,kind),color,dash)
                       for kind,(color,dash) in SEGMENT_STYLES.items()] if "segments" in spec else legend
         for label,color,dash in legend_slots:
-            visible=label in seen
-            max_chars=max(1,min(25,int((right-left-36)/6.5)))
-            label=label[:max_chars]
-            item_width=max(90,len(label)*6.5+36)
+            visible=label in seen and label not in hidden_series
+            if bin_edges:
+                label_width = sum(15 if ord(char) > 255 else 8 for char in label)
+            else:
+                max_chars = max(1, min(25, int((right-left-36)/6.5)))
+                label = label[:max_chars]
+                label_width = len(label)*6.5
+            item_width = max(90, label_width+36)
             if xpos>left and xpos+item_width>right:
                 xpos=left;legend_y+=20
             if visible:legend_items.append((xpos,legend_y,label,color,dash))
@@ -106,8 +117,16 @@ class Chart(ttk.Frame):
         pw,ph=max(right-left,1),max(bottom-top,1)
         if self.view is None:
             xs,ys=zip(*pairs); xmin,xmax=min(xs),max(xs); ymin,ymax=min(ys),max(ys)
-            dx=xmax-xmin or max(abs(xmax)*.2,1); dy=ymax-ymin or max(abs(ymax)*.2,1)
-            xmin-=dx*.06; xmax+=dx*.06; ymin-=dy*.12; ymax+=dy*.12
+            if bin_edges:
+                padding = (bin_edges[-1]-bin_edges[0])*.025
+                xmin, xmax = bin_edges[0]-padding, bin_edges[-1]+padding
+                target = max(1., ymax*1.06/5)
+                scale = 10**math.floor(math.log10(target))
+                step = next(multiple*scale for multiple in (1, 2, 2.5, 5, 10) if multiple*scale >= target)
+                ymin, ymax = 0, 5*step
+            else:
+                dx=xmax-xmin or max(abs(xmax)*.2,1); dy=ymax-ymin or max(abs(ymax)*.2,1)
+                xmin-=dx*.06; xmax+=dx*.06; ymin-=dy*.12; ymax+=dy*.12
             if spec.get("equal") or "segments" in spec:
                 ratio=pw/ph
                 if (xmax-xmin)/(ymax-ymin)<ratio:
@@ -119,11 +138,23 @@ class Chart(ttk.Frame):
         self.bounds=(left,top,right,bottom)
         sx=lambda x:left+(x-xmin)/(xmax-xmin)*pw
         sy=lambda y:bottom-(y-ymin)/(ymax-ymin)*ph
-        for i in range(6):
-            x=left+pw*i/5; y=top+ph*i/5
+        if bin_edges:
+            visible_edges = [edge for edge in bin_edges if xmin <= edge <= xmax]
+            stride = max(1, math.ceil(len(visible_edges)/max(1, pw//54)))
+            xticks = visible_edges[::stride]
+            if stride > 1 and len(visible_edges) <= pw//12:
+                for value in visible_edges:
+                    x = sx(value)
+                    self.line([x, top, x, bottom], "#1b283b")
+        else:
+            xticks = [xmin+(xmax-xmin)*i/5 for i in range(6)]
+        for value in xticks:
+            x = sx(value)
             self.line([x,top,x,bottom],"#253247")
+            self.text(x,bottom+17,f"{value:.4g}",size=9)
+        for i in range(6):
+            y=top+ph*i/5
             self.line([left,y,right,y],"#253247")
-            self.text(x,bottom+17,f"{xmin+(xmax-xmin)*i/5:.4g}",size=9)
             self.text(left-10,y,f"{ymax-(ymax-ymin)*i/5:.4g}",anchor="e",size=9)
         if ymin<0<ymax: self.line([left,sy(0),right,sy(0)],"#64748b")
         if xmin<0<xmax: self.line([sx(0),top,sx(0),bottom],"#64748b")
@@ -131,7 +162,22 @@ class Chart(ttk.Frame):
         self.text((left+right)/2,height-19,spec.get("xlabel",""),size=10)
         self.text(10,42,spec.get("ylabel",""),"#94a3b8",9,"w")
         for index,s in enumerate(series+overlays):
+            if s.get("name") in hidden_series:
+                continue
             color=s.get("color",COLORS[index%len(COLORS)])
+            if bin_edges:
+                fill = BG if s.get("hollow") else color
+                for start, end, count in zip(bin_edges, bin_edges[1:], s["y"]):
+                    if not count:
+                        continue
+                    span = end-start
+                    slot = .9*span/len(series)
+                    bar_start = start+.05*span+index*slot
+                    coords = [max(left, sx(bar_start)), max(top, sy(count)),
+                              min(right, sx(bar_start+.9*slot)), min(bottom, sy(0))]
+                    if coords[0] < coords[2] and coords[1] < coords[3]:
+                        self.rectangle(coords, fill, color)
+                continue
             last=None
             for x,y in zip(s["x"],s["y"]):
                 if not self.finite(x) or not self.finite(y): last=None; continue
@@ -141,8 +187,14 @@ class Chart(ttk.Frame):
                     if clipped: self.line(clipped,color,2,s.get("dash",()))
                 last=point
         for xpos,y,label,color,dash in legend_items:
-            self.line([xpos,y,xpos+17,y],color,3,dash)
+            if bin_edges:
+                hollow = any(s["name"] == label and s.get("hollow") for s in series)
+                self.rectangle([xpos, y-5, xpos+17, y+5], BG if hollow else color, color)
+            else:
+                self.line([xpos,y,xpos+17,y],color,3,dash)
             self.text(xpos+23,y,label,color,9,"w")
+        if bin_edges and not seen.difference(hidden_series):
+            self.text((left+right)/2, (top+bottom)/2, "請勾選要顯示的類別")
         self.text(right,bottom+38,"滾輪縮放 · 拖曳平移 / 立體旋轉 · 雙擊重設",color="#64748b",size=8,anchor="e")
 
     @staticmethod
@@ -189,7 +241,22 @@ class Chart(ttk.Frame):
         xmin,xmax,ymin,ymax=self.view
         x=xmin+(event.x-l)/(r-l)*(xmax-xmin)
         y=ymax-(event.y-t)/(b-t)*(ymax-ymin)
-        self.canvas.create_text(r-5,t+14,text=f"x={x:.5g}   y={y:.5g}",fill="#f8fafc",anchor="e",font=("Segoe UI",9),tags="cursor")
+        label = f"x={x:.5g}   y={y:.5g}"
+        anchor, inset, width = "e", 14, 0
+        bin_edges = self.spec.get("bin_edges") if self.spec else None
+        if bin_edges:
+            index = bisect_right(bin_edges,x)-1
+            if not 0 <= index < len(bin_edges)-1:
+                return
+            hidden_series = self.spec.get("hidden_series", ())
+            counts = "  ·  ".join(f"{s['name']} {s['y'][index]:,}" for s in self.spec["series"]
+                                 if s["name"] not in hidden_series)
+            if not counts:
+                return
+            label = f"{bin_edges[index]:g}° ～ {bin_edges[index+1]:g}°   {counts}"
+            anchor, inset, width = "ne", 5, max(1, r-l-10)
+        self.canvas.create_text(r-5, t+inset, text=label, fill="#f8fafc", anchor=anchor,
+                                width=width, justify="right", font=("Segoe UI",9), tags="cursor")
 
     def svg(self):
         width=max(self.canvas.winfo_width(),300); height=max(self.canvas.winfo_height(),220)

@@ -135,6 +135,9 @@ def write_report(path, project, page, state, mapping, svg, controls, *, derived_
         f"<td>{esc('N/A' if v is None else format(v, '.7g') if isinstance(v, (float, int)) else v)}</td></tr>"
         for k, v in metrics.items())
     coverage = f"範圍掃描：{mapping['valid']} / {mapping['total']} 筆有效。缺值代表不可達姿態或無有限交點。" if mapping else "本報告未包含範圍掃描。"
+    if mapping and "straight" in mapping:
+        coverage = (f"圈速檔案 {esc(controls.get('lap_csv', ''))} 有 {mapping['valid']} / {mapping['total']} 筆"
+                    f"有效彎道資料，排除 {mapping['straight']} 筆直線樣本。")
     snapshot = json.dumps({"project": project, "view_controls": controls,
                            "static_parameters": derived_parameters,
                            "mount_position_checks": mount_position_checks,

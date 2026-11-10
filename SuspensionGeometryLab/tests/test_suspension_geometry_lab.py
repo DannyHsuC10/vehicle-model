@@ -135,6 +135,62 @@ class MotionTests(unittest.TestCase):
     def setUp(self):
         self.engine = Engine(default_project())
 
+    def test_lap_camber_compares_the_same_cornering_samples_in_the_road_frame(self):
+        from suspension_geometry_lab.lap_data import LapData, LapPose, calculate_lap_camber
+        lap = LapData(
+            ((-12, 16, -8, 10), (16, -12, 10, -8), (-12, 16, -8, 10),
+             (-12, 16, -8, 10), (0, 0, 0, 0), (100, 0, 100, 0)),
+            (LapPose(0, 3, 0, .1), LapPose(0, -3, 0, -.1), LapPose(9, 3, 0, .1),
+             LapPose(0, 3, 10, .1), LapPose(0, 2, 0, 0), LapPose(0, 3, 0, .1)),
+            "curvature_1_m",
+        )
+        for axle, prefix in (("front", "F"), ("rear", "R")):
+            result = calculate_lap_camber(self.engine, axle, lap)
+            self.assertEqual((result["valid"], result["total"], result["straight"]), (4, 5, 1))
+            left, right, heaved, pitched = result["rows"]
+            for role, expected_before, left_wheel, right_wheel in (
+                    ("inner", -3, "L", "R"), ("outer", 3, "R", "L")):
+                self.assertEqual(left[f"{role}_wheel"], prefix + left_wheel)
+                self.assertEqual(right[f"{role}_wheel"], prefix + right_wheel)
+                before, after = f"{role}_camber_before_deg", f"{role}_camber_after_deg"
+                self.assertAlmostEqual(left[before], expected_before)
+                self.assertAlmostEqual(left[after]-left[before], left[f"{role}_camber_body_deg"])
+                self.assertAlmostEqual(left[after], right[after])
+                self.assertAlmostEqual(left[after], heaved[after])
+                self.assertNotAlmostEqual(left[after], pitched[after], places=4)
+                self.assertAlmostEqual(left[f"{role}_center_road_z_mm"]-heaved[f"{role}_center_road_z_mm"], 9)
+
+    def test_lap_front_steering_rotates_the_suspension_pose_and_preserves_wheel_roles(self):
+        from suspension_geometry_lab.lap_data import LapData, LapPose, calculate_lap_camber
+        from suspension_geometry_lab.wheel_end_geometry import rotation_matrix
+        lap = LapData(
+            ((0, 0, 0, 0), (-12, 16, 0, 0), (16, -12, 0, 0), (-12, 16, 0, 0)),
+            (LapPose(0, 0, 0, .1), LapPose(0, 3, 1, .1), LapPose(0, -3, 1, -.1), LapPose(0, 3, 1, .1)),
+            "curvature_1_m", ((12, 9), (16, 8), (-8, -16), (0, 0)),
+        )
+        rows = calculate_lap_camber(self.engine, "front", lap, include_steering=True)["rows"]
+        fv = calculate_lap_camber(self.engine, "front", lap)["rows"]
+        self.assertEqual(len(rows), len(fv))
+        for baseline, steered in zip(fv, rows):
+            self.assertEqual(baseline, {key: steered[key] for key in baseline})
+        self.assertAlmostEqual(rows[0]["outer_camber_steered_deg"],
+                               self.engine.solve_we(9)["metrics"]["wheel_tilt_deg"])
+        for role in ("inner", "outer"):
+            self.assertAlmostEqual(rows[1][f"{role}_camber_steered_deg"], rows[2][f"{role}_camber_steered_deg"])
+            self.assertAlmostEqual(rows[3][f"{role}_camber_steered_deg"], rows[3][f"{role}_camber_after_deg"])
+        self.assertEqual((rows[2]["inner_wheel"], rows[2]["inner_steer_deg"]), ("FR", -16))
+        self.assertEqual((rows[2]["outer_wheel"], rows[2]["outer_steer_deg"]), ("FL", -8))
+
+        _, right, _ = self.engine.fv["front"].wheel_center_sides(-12, 16)
+        pin = self.engine.scene.geometry["kingpins"]["FR"]
+        static_axis = pin["UBJ"]-pin["LBJ"]
+        suspension = rotation_matrix([1, 0, 0], -right["angle"])
+        body = rotation_matrix([0, 1, 0], math.radians(-1)) @ rotation_matrix([1, 0, 0], math.radians(3))
+        wheel_axis = suspension @ [0, -1, 0]
+        steered = rotation_matrix(suspension @ static_axis, math.radians(8)) @ wheel_axis
+        expected = -math.degrees(math.asin((body @ steered)[2]))
+        self.assertAlmostEqual(rows[1]["outer_camber_steered_deg"], expected)
+
     def test_lap_wheel_center_inputs_reproduce_contact_travel_geometry(self):
         for axle in ("front", "rear"):
             solver = self.engine.fv[axle]
@@ -439,7 +495,8 @@ class GuiTests(unittest.TestCase):
             with patch("suspension_geometry_lab.gui.filedialog.askopenfilename", return_value=str(path)):
                 self.app.open_lap()
             self.wait(panel)
-            self.assertEqual(self.app.lap_travels[0], (16, -10, 8, -4))
+            self.assertEqual(self.app.lap_data.travels[0], (16, -10, 8, -4))
+            self.assertFalse(self.app.lap_data.poses)
             self.assertEqual(panel.chart.spec["lap_total"], 2)
             self.assertEqual(len(panel.chart.spec["lap_points"]), 1)
             self.assertIn('data-label="LapSim"', panel.chart.svg())
@@ -453,7 +510,7 @@ class GuiTests(unittest.TestCase):
             with patch("suspension_geometry_lab.gui.messagebox.showerror") as error:
                 self.app.import_lap(path)
             error.assert_called_once()
-            self.assertEqual(self.app.lap_travels[0], (16, -10, 8, -4))
+            self.assertEqual(self.app.lap_data.travels[0], (16, -10, 8, -4))
 
         for key, plot in (("rear", "rc_map"), ("sv", "anti_brake_front_pct")):
             panel = self.app.panels[key]
@@ -471,6 +528,118 @@ class GuiTests(unittest.TestCase):
         panel.lap_check.invoke()
         for key in ("front", "rear", "sv"):
             self.assertNotIn("lap_points", self.app.panels[key].chart.spec)
+
+    def test_lap_camber_chart_and_csv_follow_axle_and_source_file(self):
+        from suspension_geometry_lab.analysis import LAP_CAMBER_PLOT
+        from suspension_geometry_lab.lap_data import POSE_COLUMNS, TRAVEL_COLUMNS
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as tmp:
+            path = Path(tmp) / "lap_result.csv"
+            header = ",".join((*TRAVEL_COLUMNS, *POSE_COLUMNS, "ay_g"))
+            path.write_text(header + "\n12,-16,8,-10,0,3,0,1\n-16,12,-10,8,2,-3,1,-1\n0,0,0,0,0,0,0,0\n",
+                            encoding="utf-8-sig")
+            self.app.import_lap(path)
+            for key, prefix in (("front", "F"), ("rear", "R")):
+                panel = self.app.panels[key]
+                self.app.notebook.select(panel)
+                self.app.update()
+                self.assertIn(LAP_CAMBER_PLOT[1], panel.plot_select["values"])
+                panel.plot.set(LAP_CAMBER_PLOT[1])
+                panel.request()
+                self.wait(panel)
+                self.assertEqual(len(panel.chart.spec["series"]), 4)
+                checks = [widget for widget in panel.camber_filter.winfo_children()
+                          if widget.winfo_class() == "TCheckbutton"]
+                self.assertEqual(len(checks), 4)
+                self.assertEqual(panel.chart.spec["hidden_series"], [])
+                checks[0].invoke()
+                self.assertEqual(panel.chart.spec["hidden_series"], ["內側 · 純車身姿態"])
+                self.assertEqual(panel.mapping["straight"], 1)
+                panel.lap_check.invoke()
+                self.assertEqual(len(panel.chart.spec["series"]), 4)
+                output = Path(tmp) / (key + ".csv")
+                self.app.perform_export("mapping", output, panel)
+                with output.open(encoding="utf-8-sig", newline="") as stream:
+                    rows = list(csv.DictReader(stream))
+                self.assertEqual([row["inner_wheel"] for row in rows], [prefix+"L", prefix+"R"])
+                self.assertEqual([row["ay_g"] for row in rows], ["1.0", "-1.0"])
+
+            path.write_text(header + "\n0,0,0,0,2,4,0,1\n", encoding="utf-8-sig")
+            self.app.import_lap(path)
+            self.wait(panel)
+            self.assertEqual(panel.mapping["valid"], 1)
+            self.assertAlmostEqual(panel.mapping["rows"][0]["inner_camber_before_deg"], -4)
+            self.assertLess(panel.chart.view[0], -4)
+            self.assertGreater(panel.chart.view[1], 4)
+
+            path.write_text(",".join(TRAVEL_COLUMNS) + "\n0,0,0,0\n", encoding="utf-8-sig")
+            self.app.import_lap(path)
+            self.wait(panel)
+            self.assertEqual(panel.plot_key, "motion")
+            self.assertNotIn(LAP_CAMBER_PLOT[1], panel.plot_select["values"])
+
+    def test_we_lap_histogram_has_six_paired_series_and_restores_the_normal_axle(self):
+        from suspension_geometry_lab.analysis import LAP_CAMBER_PLOT
+        from suspension_geometry_lab.lap_data import FRONT_STEER_COLUMNS, POSE_COLUMNS, TRAVEL_COLUMNS
+        panel = self.app.panels["we"]
+        self.app.notebook.select(panel)
+        self.app.update()
+        panel.axle.set("rear")
+        self.assertFalse(panel.camber_filter.winfo_manager())
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as tmp:
+            path = Path(tmp) / "lap_result.csv"
+            columns = (*TRAVEL_COLUMNS, *POSE_COLUMNS, "ay_g")
+            pose_rows = ("12,-16,8,-10,0,3,0,1", "-16,12,-10,8,2,-3,1,-1")
+            path.write_text(",".join((*columns, *FRONT_STEER_COLUMNS))
+                            + f"\n{pose_rows[0]},16,8\n{pose_rows[1]},-8,-16\n", encoding="utf-8-sig")
+            self.app.import_lap(path)
+            self.assertIn(LAP_CAMBER_PLOT[1], panel.plot_select["values"])
+            panel.plot.set(LAP_CAMBER_PLOT[1])
+            panel.request()
+            self.wait(panel)
+            self.assertFalse(panel.axle_controls.winfo_manager())
+            self.assertTrue(panel.sliders[0].instate(["disabled"]))
+            spec = panel.chart.spec
+            self.assertEqual([sum(series["y"]) for series in spec["series"]], [2]*6)
+            self.assertTrue(all(b-a == .25 for a, b in zip(spec["bin_edges"], spec["bin_edges"][1:])))
+            self.assertTrue(panel.camber_filter.winfo_viewable())
+            checks = [widget for widget in panel.camber_filter.winfo_children()
+                      if widget.winfo_class() == "TCheckbutton"]
+            labels = [f"{side} · {stage}" for side in ("內側", "外側")
+                      for stage in ("純車身姿態", "姿態＋懸吊", "姿態＋懸吊＋轉向")]
+            self.assertEqual([widget.cget("text") for widget in checks], labels)
+            for label in labels:
+                self.assertIn(label, panel.chart.svg())
+            view, token = panel.chart.view.copy(), panel.token
+            checks[-1].invoke()
+            self.assertEqual(panel.chart.spec["hidden_series"], ["外側 · 姿態＋懸吊＋轉向"])
+            self.assertEqual(panel.chart.spec["bin_edges"], spec["bin_edges"])
+            self.assertEqual(panel.chart.view, view)
+            self.assertEqual(panel.token, token)
+            output = Path(tmp) / "we.csv"
+            self.app.perform_export("mapping", output, panel)
+            with output.open(encoding="utf-8-sig", newline="") as stream:
+                rows = list(csv.DictReader(stream))
+            self.assertEqual([row["inner_wheel"] for row in rows], ["FL", "FR"])
+            self.assertEqual([row["inner_steer_deg"] for row in rows], ["16.0", "-16.0"])
+            self.assertIn("outer_camber_steered_deg", rows[0])
+
+            panel.plot.set(PLOTS["we"][0][1])
+            panel.request()
+            self.assertFalse(panel.camber_filter.winfo_manager())
+            panel.plot.set(LAP_CAMBER_PLOT[1])
+            panel.request()
+            self.wait(panel)
+            self.assertEqual(panel.chart.spec["hidden_series"], ["外側 · 姿態＋懸吊＋轉向"])
+
+            path.write_text(",".join(columns) + "\n" + "\n".join(pose_rows) + "\n", encoding="utf-8")
+            self.app.import_lap(path)
+            self.wait(panel)
+            self.assertEqual(panel.plot_key, "motion")
+            self.assertNotIn(LAP_CAMBER_PLOT[1], panel.plot_select["values"])
+            self.assertEqual(panel.axle.get(), "rear")
+            self.assertTrue(panel.axle_controls.winfo_manager())
+            self.assertFalse(panel.sliders[0].instate(["disabled"]))
+            self.assertFalse(panel.camber_filter.winfo_manager())
 
     def test_import_prompts_for_missing_cells_and_commits_only_valid_repair(self):
         previous = self.app.project

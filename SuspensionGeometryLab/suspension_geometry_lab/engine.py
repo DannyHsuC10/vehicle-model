@@ -209,12 +209,18 @@ class FVMotion:
             state.setdefault("IC", None)
         return state
 
+    def wheel_center_sides(self, left_mm, right_mm):
+        left = self.side(left_mm, True, wheel_center=True)
+        right = self.side(right_mm, wheel_center=True)
+        contact_travels = tuple(float((s["gnd"][1] - self.zero["gnd"][1])*1000) for s in (left, right))
+        check_pose_travel(contact_travels, self.travel_bounds)
+        return left, right, contact_travels
+
     def solve(self, left_mm, right_mm, gains=True, *, wheel_center=False):
-        left = self.side(left_mm, True, wheel_center=wheel_center)
-        right = self.side(right_mm, wheel_center=wheel_center)
         if wheel_center:
-            left_mm, right_mm = ((s["gnd"][1] - self.zero["gnd"][1])*1000 for s in (left, right))
-            check_pose_travel((left_mm, right_mm), self.travel_bounds)
+            left, right, (left_mm, right_mm) = self.wheel_center_sides(left_mm, right_mm)
+        else:
+            left, right = self.side(left_mm, True), self.side(right_mm)
         def cambers(l, r):
             g = r["gnd"] - l["gnd"]
             roll = math.atan2(g[1], g[0])

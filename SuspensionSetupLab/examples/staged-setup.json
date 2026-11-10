@@ -1,0 +1,491 @@
+{
+  "application": "SuspensionSetupLab",
+  "schema_version": 1,
+  "name": "多段元件示例",
+  "model": "flex",
+  "notes": [],
+  "vehicle": {
+    "m": 321.0,
+    "lf": 0.765,
+    "lr": 0.765,
+    "tf": 1.28,
+    "tr": 1.24,
+    "h_cg": 0.3,
+    "Ixx": 60.0,
+    "Iyy": 100.0,
+    "h_rc_f": 0.025,
+    "h_rc_r": 0.025,
+    "dive_front": 0.15,
+    "lift_rear": 0.15,
+    "lift_front": 0.15,
+    "squat_rear": 0.15,
+    "body_twist_k": 180000.0,
+    "body_twist_c": 300.0
+  },
+  "tires": {
+    "FL": {
+      "mu": 15.0,
+      "k": 80.0,
+      "c": 300.0
+    },
+    "FR": {
+      "mu": 15.0,
+      "k": 80.0,
+      "c": 300.0
+    },
+    "RL": {
+      "mu": 15.0,
+      "k": 80.0,
+      "c": 300.0
+    },
+    "RR": {
+      "mu": 15.0,
+      "k": 80.0,
+      "c": 300.0
+    }
+  },
+  "channels": {
+    "heave_f": {
+      "enabled": true,
+      "spring_kind": "tender",
+      "spring": [
+        [
+          0,
+          35.0
+        ]
+      ],
+      "damper_kind": "stages",
+      "compression": [
+        [
+          0.0,
+          1600.0
+        ],
+        [
+          0.03,
+          900.0
+        ],
+        [
+          0.12,
+          500.0
+        ]
+      ],
+      "rebound": [
+        [
+          0.0,
+          3600.0
+        ],
+        [
+          0.05,
+          1800.0
+        ],
+        [
+          0.18,
+          950.0
+        ]
+      ],
+      "mr": [
+        [
+          0,
+          1.0
+        ]
+      ],
+      "installed_mm": 1.0,
+      "main_rate": 55.0,
+      "tender_rate": 25.0,
+      "tender_travel": 5.0,
+      "jounce_mm": 15.0,
+      "jounce_rate": 70.0,
+      "rebound_mm": 50.0,
+      "rebound_rate": 0.0
+    },
+    "heave_r": {
+      "enabled": true,
+      "spring_kind": "stages",
+      "spring": [
+        [
+          -20.0,
+          18.0
+        ],
+        [
+          0.0,
+          31.5
+        ],
+        [
+          22.0,
+          55.0
+        ]
+      ],
+      "damper_kind": "stages",
+      "compression": [
+        [
+          0,
+          3175
+        ]
+      ],
+      "rebound": [
+        [
+          0,
+          3175
+        ]
+      ],
+      "mr": [
+        [
+          -20.0,
+          0.88
+        ],
+        [
+          0.0,
+          0.93
+        ],
+        [
+          35.0,
+          1.04
+        ]
+      ],
+      "installed_mm": 0.0,
+      "main_rate": 31.5,
+      "tender_rate": 25.0,
+      "tender_travel": 4.3,
+      "jounce_mm": 50.0,
+      "jounce_rate": 0.0,
+      "rebound_mm": 50.0,
+      "rebound_rate": 0.0
+    },
+    "roll_f": {
+      "enabled": true,
+      "spring_kind": "stages",
+      "spring": [
+        [
+          0,
+          20.0
+        ]
+      ],
+      "damper_kind": "force",
+      "compression": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          0.05,
+          110.0
+        ],
+        [
+          0.2,
+          270.0
+        ],
+        [
+          0.4,
+          380.0
+        ]
+      ],
+      "rebound": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          0.05,
+          165.0
+        ],
+        [
+          0.2,
+          390.0
+        ],
+        [
+          0.4,
+          510.0
+        ]
+      ],
+      "mr": [
+        [
+          0,
+          1.0
+        ]
+      ],
+      "installed_mm": 0.0,
+      "main_rate": 20.0,
+      "tender_rate": 25.0,
+      "tender_travel": 4.3,
+      "jounce_mm": 50.0,
+      "jounce_rate": 0.0,
+      "rebound_mm": 50.0,
+      "rebound_rate": 0.0
+    },
+    "roll_r": {
+      "enabled": true,
+      "spring_kind": "stages",
+      "spring": [
+        [
+          0,
+          18.0
+        ]
+      ],
+      "damper_kind": "stages",
+      "compression": [
+        [
+          0,
+          2400
+        ]
+      ],
+      "rebound": [
+        [
+          0,
+          2400
+        ]
+      ],
+      "mr": [
+        [
+          0,
+          1.0
+        ]
+      ],
+      "installed_mm": 0.0,
+      "main_rate": 18.0,
+      "tender_rate": 25.0,
+      "tender_travel": 4.3,
+      "jounce_mm": 50.0,
+      "jounce_rate": 0.0,
+      "rebound_mm": 50.0,
+      "rebound_rate": 0.0
+    },
+    "roll_c": {
+      "enabled": false,
+      "spring_kind": "stages",
+      "spring": [
+        [
+          0,
+          0.0
+        ]
+      ],
+      "damper_kind": "stages",
+      "compression": [
+        [
+          0,
+          0
+        ]
+      ],
+      "rebound": [
+        [
+          0,
+          0
+        ]
+      ],
+      "mr": [
+        [
+          0,
+          1.0
+        ]
+      ],
+      "installed_mm": 0.0,
+      "main_rate": 35.0,
+      "tender_rate": 25.0,
+      "tender_travel": 4.3,
+      "jounce_mm": 50.0,
+      "jounce_rate": 0.0,
+      "rebound_mm": 50.0,
+      "rebound_rate": 0.0
+    },
+    "warp": {
+      "enabled": false,
+      "spring_kind": "stages",
+      "spring": [
+        [
+          0,
+          0.0
+        ]
+      ],
+      "damper_kind": "stages",
+      "compression": [
+        [
+          0,
+          0
+        ]
+      ],
+      "rebound": [
+        [
+          0,
+          0
+        ]
+      ],
+      "mr": [
+        [
+          0,
+          1.0
+        ]
+      ],
+      "installed_mm": 0.0,
+      "main_rate": 35.0,
+      "tender_rate": 25.0,
+      "tender_travel": 4.3,
+      "jounce_mm": 50.0,
+      "jounce_rate": 0.0,
+      "rebound_mm": 50.0,
+      "rebound_rate": 0.0
+    },
+    "FL": {
+      "enabled": false,
+      "spring_kind": "stages",
+      "spring": [
+        [
+          0,
+          0.0
+        ]
+      ],
+      "damper_kind": "stages",
+      "compression": [
+        [
+          0,
+          0
+        ]
+      ],
+      "rebound": [
+        [
+          0,
+          0
+        ]
+      ],
+      "mr": [
+        [
+          0,
+          1.0
+        ]
+      ],
+      "installed_mm": 0.0,
+      "main_rate": 35.0,
+      "tender_rate": 25.0,
+      "tender_travel": 4.3,
+      "jounce_mm": 50.0,
+      "jounce_rate": 0.0,
+      "rebound_mm": 50.0,
+      "rebound_rate": 0.0
+    },
+    "FR": {
+      "enabled": false,
+      "spring_kind": "stages",
+      "spring": [
+        [
+          0,
+          0.0
+        ]
+      ],
+      "damper_kind": "stages",
+      "compression": [
+        [
+          0,
+          0
+        ]
+      ],
+      "rebound": [
+        [
+          0,
+          0
+        ]
+      ],
+      "mr": [
+        [
+          0,
+          1.0
+        ]
+      ],
+      "installed_mm": 0.0,
+      "main_rate": 35.0,
+      "tender_rate": 25.0,
+      "tender_travel": 4.3,
+      "jounce_mm": 50.0,
+      "jounce_rate": 0.0,
+      "rebound_mm": 50.0,
+      "rebound_rate": 0.0
+    },
+    "RL": {
+      "enabled": false,
+      "spring_kind": "stages",
+      "spring": [
+        [
+          0,
+          0.0
+        ]
+      ],
+      "damper_kind": "stages",
+      "compression": [
+        [
+          0,
+          0
+        ]
+      ],
+      "rebound": [
+        [
+          0,
+          0
+        ]
+      ],
+      "mr": [
+        [
+          0,
+          1.0
+        ]
+      ],
+      "installed_mm": 0.0,
+      "main_rate": 35.0,
+      "tender_rate": 25.0,
+      "tender_travel": 4.3,
+      "jounce_mm": 50.0,
+      "jounce_rate": 0.0,
+      "rebound_mm": 50.0,
+      "rebound_rate": 0.0
+    },
+    "RR": {
+      "enabled": false,
+      "spring_kind": "stages",
+      "spring": [
+        [
+          0,
+          0.0
+        ]
+      ],
+      "damper_kind": "stages",
+      "compression": [
+        [
+          0,
+          0
+        ]
+      ],
+      "rebound": [
+        [
+          0,
+          0
+        ]
+      ],
+      "mr": [
+        [
+          0,
+          1.0
+        ]
+      ],
+      "installed_mm": 0.0,
+      "main_rate": 35.0,
+      "tender_rate": 25.0,
+      "tender_travel": 4.3,
+      "jounce_mm": 50.0,
+      "jounce_rate": 0.0,
+      "rebound_mm": 50.0,
+      "rebound_rate": 0.0
+    }
+  },
+  "case": {
+    "scenario": "bump",
+    "target": "FL",
+    "duration": 2.0,
+    "dt": 0.002,
+    "start": 0.5,
+    "height": 15.0,
+    "period": 0.12,
+    "speed": 12.0,
+    "ax": -5.0,
+    "ay": 5.0,
+    "ramp": 0.2,
+    "rear_delay": false,
+    "recording": [],
+    "recording_name": ""
+  }
+}

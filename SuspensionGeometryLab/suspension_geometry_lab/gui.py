@@ -12,9 +12,10 @@ from .project import (FIELDS, DERIVED_AXLE_FIELDS, MOUNT_X_FIELDS, mount_x_setti
                       default_project, save_project, validate)
 from .project_import import fill_import_project, read_import_project
 from .engine import Engine, Unreachable
-from .analysis import ANTI_RESULT_LABELS, PAGES, PLOTS, NOTES, calculate_mapping, make_plot, static_point_rows
+from .analysis import (ANTI_RESULT_LABELS, LAP_CAMBER_PLOT, LAP_CAMBER_SERIES_BY_PAGE, PAGES, PLOTS, NOTES,
+                       calculate_mapping, make_plot, static_point_rows)
 from .charts import LabChart
-from .lap_data import LAP_PAGES, calculate_lap_metrics, read_lap_travels
+from .lap_data import LAP_PAGES, calculate_lap_camber, calculate_lap_metrics, read_lap_data
 from .export import STEP_PAGES, point_rows, write_report, write_csv, write_step
 from . import hardpoints
 from .input_limits import FIELD_LIMITS, NAME_MAX_LENGTH, range_hint, round_design_input
@@ -492,8 +493,10 @@ class Panel(ttk.Frame):
         self.plot_select.bind("<<ComboboxSelected>>", lambda e: self.request())
         ttk.Button(toolbar, text="重設視角", command=lambda: self.chart.reset()).pack(side="left", padx=4)
         if key == "we":
-            ttk.Label(toolbar, text="車軸").pack(side="left", padx=(8, 0))
-            combo = ttk.Combobox(toolbar, state="readonly", textvariable=self.axle, values=["front", "rear"], width=8)
+            self.axle_controls = ttk.Frame(toolbar)
+            self.axle_controls.pack(side="left")
+            ttk.Label(self.axle_controls, text="車軸").pack(side="left", padx=(8, 0))
+            combo = ttk.Combobox(self.axle_controls, state="readonly", textvariable=self.axle, values=["front", "rear"], width=8)
             combo.pack(side="left", padx=6)
             combo.bind("<<ComboboxSelected>>", lambda e: self.request())
         if key in ("front", "rear", "sv"):
@@ -518,16 +521,18 @@ class Panel(ttk.Frame):
             row = ttk.Frame(right, padding=(8, 4))
             row.pack(fill="x")
             ttk.Checkbutton(row, text="顯示 IC / 力線參考", variable=self.construction, command=self.render).pack(side="left")
-            ttk.Button(row, text="回到零姿態", command=self.zero).pack(side="left", padx=12)
-        if key in LAP_PAGES:
+            self.zero_button = ttk.Button(row, text="回到零姿態", command=self.zero)
+            self.zero_button.pack(side="left", padx=12)
+        if key in (*LAP_PAGES, "we"):
             row = ttk.Frame(right, padding=(8, 2))
             row.pack(fill="x")
             ttk.Button(row, text="匯入 LapSim CSV", command=app.open_lap).pack(side="left")
-            self.lap_check = ttk.Checkbutton(row, text="顯示 LapSim 行程分布",
-                                             variable=app.show_lap, command=app.toggle_lap)
-            self.lap_check.pack(side="left", padx=8)
-            self.lap_check.state(["disabled"])
-            ttk.Label(row, textvariable=app.lap_source, foreground="#475569").pack(side="left", fill="x", expand=True)
+            if key in LAP_PAGES:
+                self.lap_check = ttk.Checkbutton(row, text="顯示 LapSim 行程分布",
+                                                 variable=app.show_lap, command=app.toggle_lap)
+                self.lap_check.pack(side="left", padx=8)
+                self.lap_check.state(["disabled"])
+            ttk.Label(row, textvariable=app.lap_source, foreground="#475569").pack(side="left", padx=8)
         self.sliders, self.slider_labels = [], []
         for i in range(0 if key == "static" else 1 if key == "we" else 2):
             row = ttk.Frame(right, padding=(8, 2))
@@ -540,6 +545,17 @@ class Panel(ttk.Frame):
             self.sliders.append(scale)
         self.configure_sliders()
         self.chart = LabChart(right)
+        self.camber_filter = None
+        if key in LAP_CAMBER_SERIES_BY_PAGE:
+            self.camber_filter = ttk.Frame(right, padding=(8, 2))
+            self.camber_visible = {}
+            series = LAP_CAMBER_SERIES_BY_PAGE[key]
+            stages = len(series)//2
+            ttk.Label(self.camber_filter, text="顯示類別").grid(row=0, column=0, rowspan=2, padx=(0, 8))
+            for i, (metric, label, _, _) in enumerate(series):
+                variable = self.camber_visible[metric] = tk.BooleanVar(value=True)
+                ttk.Checkbutton(self.camber_filter, text=label, variable=variable, command=self.render).grid(
+                    row=i//stages, column=1+i%stages, sticky="w", padx=(0, 12))
         metric_frame = ttk.Frame(right)
         self.metrics = ttk.Treeview(metric_frame, columns=("metric", "value"), show="headings", height=5)
         self.metrics.heading("metric", text="目前姿態結果 / 單位")
@@ -613,6 +629,7 @@ class Panel(ttk.Frame):
     def configure_sliders(self):
         a = self.app.project["analysis"]
         pose = self.mode.get().startswith("Heave")
+        we_lap = self.key == "we" and self.plot_key == LAP_CAMBER_PLOT[0]
         labels = ["Steering (deg)"] if self.key == "we" else (["Heave (mm)", "Pitch (deg)" if self.key == "sv" else "Roll (deg)"] if pose else ["前輪上壓行程 (mm)", "後輪上壓行程 (mm)"] if self.key == "sv" else ["左輪上壓行程 (mm)", "右輪上壓行程 (mm)"])
         for i, scale in enumerate(self.sliders):
             if self.key == "we":
@@ -634,8 +651,9 @@ class Panel(ttk.Frame):
             else:
                 low, high = travel_limits(self.app.project)
             scale.configure(from_=low, to=high)
-            scale.state(["disabled"] if low == high else ["!disabled"])
-            self.slider_labels[i].configure(text=f"{labels[i]}  {self.controls[i].get():+.2f}")
+            scale.state(["disabled"] if we_lap or low == high else ["!disabled"])
+            self.slider_labels[i].configure(text="前輪轉角取自 LapSim CSV" if we_lap else
+                                           f"{labels[i]}  {self.controls[i].get():+.2f}")
 
     def change_mode(self, event=None):
         self.zero()
@@ -665,7 +683,28 @@ class Panel(ttk.Frame):
 
     @property
     def plot_key(self):
+        if self.plot.get() == LAP_CAMBER_PLOT[1]:
+            return LAP_CAMBER_PLOT[0]
         return next(key for key, name in PLOTS[self.key] if name == self.plot.get())
+
+    def update_lap_plots(self):
+        choices = [label for _, label in PLOTS[self.key]]
+        lap = self.app.lap_data
+        if lap.poses and (self.key in ("front", "rear") or (self.key == "we" and lap.front_steer_deg)):
+            choices.append(LAP_CAMBER_PLOT[1])
+        self.plot_select.configure(values=choices)
+        if self.plot.get() not in choices:
+            self.plot.set(choices[0])
+            self.mapping = None
+
+    def update_camber_controls(self, show):
+        if self.camber_filter is None:
+            return
+        if show:
+            if not self.camber_filter.winfo_manager():
+                self.camber_filter.pack(before=self.chart, fill="x")
+        else:
+            self.camber_filter.pack_forget()
 
     def request(self, force_mapping=False, pending_export=None):
         if not self.ready:
@@ -683,13 +722,26 @@ class Panel(ttk.Frame):
         values = tuple(v.get() for v in self.controls)
         key, plot_key = self.key, self.plot_key
         need_map = force_mapping or (key != "static" and plot_key != "motion")
-        lap_travels = self.app.lap_travels
+        lap_data = self.app.lap_data
         lap_cache = self.app.lap_cache
-        need_lap = lap_travels and self.app.show_lap.get() and key in LAP_PAGES and plot_key != "motion"
+        lap_camber = plot_key == LAP_CAMBER_PLOT[0]
+        self.update_camber_controls(lap_camber)
+        we_lap = lap_camber and key == "we"
+        if key == "we":
+            if we_lap:
+                self.axle_controls.pack_forget()
+                axle = "front"
+            elif not self.axle_controls.winfo_manager():
+                self.axle_controls.pack(side="left")
+            self.zero_button.state(["disabled"] if we_lap else ["!disabled"])
+            self.configure_sliders()
+        need_lap = (lap_data and self.app.show_lap.get() and key in LAP_PAGES
+                    and plot_key != "motion" and not lap_camber)
         self.pending_export = pending_export
         self.ready_for_export = False
         self.app.status.set(f"{PAGES[key]} · 計算中…")
-        cancelled = lambda: self.token != token or self.app.revision != revision or self.app.closing
+        cancelled = lambda: (self.token != token or self.app.revision != revision or self.app.closing
+                             or (lap_camber and self.app.lap_data is not lap_data))
         def work():
             if cancelled():
                 return
@@ -708,7 +760,15 @@ class Panel(ttk.Frame):
                                              **engine.static_anti_metrics}, "points": {}}
                 except ValueError as exc:
                     error = str(exc)
-                if need_map and not cancelled():
+                if lap_camber and not cancelled():
+                    camber_key = (key, plot_key)
+                    mapping = lap_cache.get(camber_key)
+                    if mapping is None:
+                        mapping = calculate_lap_camber(engine, "front" if we_lap else key, lap_data, cancelled,
+                                                       include_steering=we_lap)
+                        if mapping is not None and not cancelled():
+                            lap_cache[camber_key] = mapping
+                elif need_map and not cancelled():
                     cache_key = (key, mode, axle)
                     mapping = cache.get(cache_key)
                     if mapping is None:
@@ -717,8 +777,8 @@ class Panel(ttk.Frame):
                             cache[cache_key] = mapping
                 if need_lap and key not in lap_cache and not cancelled():
                     lap_cancelled = lambda: (self.app.revision != revision or self.app.closing
-                                             or self.app.lap_travels is not lap_travels)
-                    lap = calculate_lap_metrics(engine, key, lap_travels, lap_cancelled)
+                                             or self.app.lap_data is not lap_data)
+                    lap = calculate_lap_metrics(engine, key, lap_data.travels, lap_cancelled)
                     if lap is not None and not lap_cancelled():
                         lap_cache[key] = lap
             except Exception as exc:
@@ -732,10 +792,22 @@ class Panel(ttk.Frame):
         self.state, self.mapping, self.error = state, mapping, error
         self.ready_for_export = True
         self.metrics.delete(*self.metrics.get_children())
-        for key, value in (state or {}).get("metrics", {}).items():
-            self.metrics.insert("", "end", values=(ANTI_RESULT_LABELS.get(key, key), "N/A" if value is None else f"{value:.7g}"))
+        if self.plot_key == LAP_CAMBER_PLOT[0] and mapping:
+            self.metrics.heading("metric", text="圈速過彎 Camber")
+            self.metrics.heading("value", text="樣本數／最小至最大值（deg）")
+            self.metrics.insert("", "end", values=("有效彎道／全部彎道",
+                                f"{mapping['valid']:,} / {mapping['total']:,}（排除直線 {mapping['straight']:,} 筆）"))
+            for key, label, _, _ in LAP_CAMBER_SERIES_BY_PAGE[self.key]:
+                values = [row[key] for row in mapping["rows"]]
+                self.metrics.insert("", "end", values=(label, f"{min(values):+.3f} ～ {max(values):+.3f}" if values else "N/A"))
+        else:
+            self.metrics.heading("metric", text="目前姿態結果 / 單位")
+            self.metrics.heading("value", text="數值（N/A：目前姿態無有效定義）")
+            for key, value in (state or {}).get("metrics", {}).items():
+                self.metrics.insert("", "end", values=(ANTI_RESULT_LABELS.get(key, key), "N/A" if value is None else f"{value:.7g}"))
         self.render()
-        coverage = f" · 掃描 {mapping['valid']}/{mapping['total']} 有效" if mapping else ""
+        samples = "彎道" if self.plot_key == LAP_CAMBER_PLOT[0] else "掃描"
+        coverage = f" · {samples} {mapping['valid']}/{mapping['total']} 有效" if mapping else ""
         self.app.status.set((f"{PAGES[self.key]} · {error}" if error else f"{PAGES[self.key]} · 完成")+coverage)
         if self.pending_export:
             kind, path = self.pending_export
@@ -752,16 +824,28 @@ class Panel(ttk.Frame):
     def render(self):
         if not self.ready:
             return
-        if self.key != "static" and self.plot_key == "motion" and not self.state:
+        plot = self.plot_key
+        lap_camber = plot == LAP_CAMBER_PLOT[0]
+        self.update_camber_controls(lap_camber)
+        if self.key != "static" and plot == "motion" and not self.state:
             self.chart.set(None, preserve_view=True)
             return
-        spec = make_plot(self.key, self.plot_key, self.state, self.mapping, self.app.engine,
+        mapping = self.mapping
+        if lap_camber:
+            mapping = self.app.lap_cache.get((self.key, plot))
+        elif mapping and "grid" not in mapping:
+            mapping = None
+        spec = make_plot(self.key, plot, self.state, mapping, self.app.engine,
                          {k: v.get() for k, v in self.groups.items()},
                          show_static_references=self.static_references.get(),
                          lap=self.app.lap_cache.get(self.key) if self.app.show_lap.get() else None)
+        if spec and lap_camber:
+            spec["hidden_series"] = [label for metric, label, _, _ in LAP_CAMBER_SERIES_BY_PAGE[self.key]
+                                     if not self.camber_visible[metric].get()]
         if spec and "world_lines" in spec and self.key != "static" and not self.construction.get():
             spec["world_lines"] = [p for p in spec["world_lines"] if not p["construction"]]
-        chart_key = (self.plot_key, self.mode.get(), self.axle.get())
+        source = id(self.app.lap_data) if lap_camber else None
+        chart_key = (plot, self.mode.get(), self.axle.get(), source)
         self.chart.set(spec, preserve_view=chart_key == self._chart_key)
         self._chart_key = chart_key
 
@@ -792,7 +876,7 @@ class App(tk.Tk):
         self.editor = None
         self.mapping_cache = {}
         self.lap_cache = {}
-        self.lap_travels = ()
+        self.lap_data = None
         self.lap_path = None
         self.show_lap = tk.BooleanVar(value=False)
         self.lap_source = tk.StringVar(value="尚未匯入")
@@ -931,25 +1015,36 @@ class App(tk.Tk):
 
     def import_lap(self, path):
         try:
-            travels = read_lap_travels(path)
+            lap_data = read_lap_data(path)
         except (OSError, ValueError, csv.Error) as exc:
             messagebox.showerror("無法匯入 LapSim CSV", str(exc), parent=self)
             return
-        self.lap_travels = travels
+        was_camber = self.active.plot_key == LAP_CAMBER_PLOT[0]
+        self.lap_data = lap_data
         self.lap_path = Path(path)
         self.lap_cache = {}
         self.show_lap.set(True)
-        self.lap_source.set(f"{self.lap_path.name} · {len(travels):,} 筆")
+        count = len(lap_data.travels)
+        self.lap_source.set(f"{self.lap_path.name} · {count:,} 筆")
         for key in LAP_PAGES:
             self.panels[key].lap_check.state(["!disabled"])
-        self.status.set(f"已匯入 {self.lap_path.name} · {len(travels):,} 筆")
+            self.panels[key].update_lap_plots()
+        self.panels["we"].update_lap_plots()
+        self.panels["we"].render()
+        self.status.set(f"已匯入 {self.lap_path.name} · {count:,} 筆")
+        if not lap_data.poses:
+            self.status.set(self.status.get() + " · 缺少車身姿態或轉彎方向，僅供行程疊圖")
+        elif self.active.key == "we" and not lap_data.front_steer_deg:
+            self.status.set(self.status.get() + " · 缺少左右前輪轉角，無法產生輪端圈速 Camber 圖")
         self.toggle_lap()
+        if was_camber:
+            self.active.request()
 
     def toggle_lap(self):
         for key in LAP_PAGES:
             self.panels[key].render()
         panel = self.active
-        if (self.show_lap.get() and panel.key in LAP_PAGES and panel.plot_key != "motion"
+        if (self.show_lap.get() and panel.key in LAP_PAGES and panel.plot_key not in ("motion", LAP_CAMBER_PLOT[0])
                 and panel.key not in self.lap_cache):
             panel.request()
 
@@ -986,8 +1081,9 @@ class App(tk.Tk):
             return
         extension = {"state": ".csv", "points": ".csv", "mapping": ".csv", "png": ".png",
                      "svg": ".svg", "report": ".html", "step": ".step"}[kind]
+        name = "lap_camber" if kind == "mapping" and panel.plot_key == LAP_CAMBER_PLOT[0] else kind
         path = filedialog.asksaveasfilename(parent=self, defaultextension=extension,
-                    initialfile=f"suspension_{panel.key}_{kind}{extension}", filetypes=[(extension, "*"+extension)])
+                    initialfile=f"suspension_{panel.key}_{name}{extension}", filetypes=[(extension, "*"+extension)])
         if not path:
             return
         if kind == "mapping" and panel.mapping is None:
@@ -1013,6 +1109,11 @@ class App(tk.Tk):
                 if panel.key == "static":
                     controls.update(static_references=panel.static_references.get(),
                                     static_groups={k: v.get() for k, v in panel.groups.items()})
+                if panel.plot_key == LAP_CAMBER_PLOT[0]:
+                    controls["lap_csv"] = self.lap_path.name
+                    controls["lap_visible_series"] = [metric for metric, var in panel.camber_visible.items() if var.get()]
+                    if panel.key == "we":
+                        controls["axle"] = "front"
                 write_report(path, self.project, panel.key, panel.state, panel.mapping, panel.chart.svg(), controls,
                              derived_parameters=self.engine.derived_parameters,
                              mount_position_checks=self.engine.scene.geometry.get("mount_position_checks"))

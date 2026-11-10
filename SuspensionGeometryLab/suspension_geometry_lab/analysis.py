@@ -31,11 +31,31 @@ PLOTS = {
     "static": [("iso", "全車 3D"), ("front", "全車前視"), ("side", "全車側視"), ("top", "全車上視")],
 }
 PLOTS["rear"] = PLOTS["front"]
+LAP_CAMBER_PLOT = ("lap_camber", "LapSim 過彎 Camber 分布")
+LAP_CAMBER_BIN_DEG = .25
+LAP_CAMBER_SERIES = (
+    ("inner_camber_before_deg", "內側 · 純車身姿態", "#38bdf8", True),
+    ("inner_camber_after_deg", "內側 · 姿態＋懸吊", "#38bdf8", False),
+    ("outer_camber_before_deg", "外側 · 純車身姿態", "#fbbf24", True),
+    ("outer_camber_after_deg", "外側 · 姿態＋懸吊", "#fbbf24", False),
+)
+LAP_CAMBER_SERIES_BY_PAGE = {
+    "front": LAP_CAMBER_SERIES,
+    "rear": LAP_CAMBER_SERIES,
+    "we": (
+        LAP_CAMBER_SERIES[0],
+        ("inner_camber_after_deg", "內側 · 姿態＋懸吊", "#0284c7", False),
+        ("inner_camber_steered_deg", "內側 · 姿態＋懸吊＋轉向", "#38bdf8", False),
+        LAP_CAMBER_SERIES[2],
+        ("outer_camber_after_deg", "外側 · 姿態＋懸吊", "#b77908", False),
+        ("outer_camber_steered_deg", "外側 · 姿態＋懸吊＋轉向", "#fbbf24", False),
+    ),
+}
 NOTES = {
     "front": "動態圖使用接地座標：原點為兩接地點中點，x′ 左→右，y′ 垂直向上。CG 與車身接點一同轉換，隨升降／roll 移動。RC0 為車身零位參考；gain 為局部偏導 deg/mm。",
     "rear": "後軸使用獨立設計。動態圖與 RC 均使用當前接地座標；CG 與車身接點一同轉換。RC0 為車身零位參考，圖中隨車身姿態移動。",
     "sv": "Anti 輸入與結果的水平正向都朝另一軸。煞車與加速共用接地點→SVIC，結果依各軸的煞車或驅動力占比加權。",
-    "we": "繞靜態全車主銷轉向；座標 X 前／Y 左／Z 上。接地點=負載半徑中心圓最低點，未解輪胎變形或頂升平衡；material 為原接地材料點。固定主銷 caster 不隨 steering 改變；曲面掃描不同設計 caster。",
+    "we": "輪端掃描繞靜態主銷轉向，座標 X 前／Y 左／Z 上。接地點為負載半徑中心圓最低點，material 為原接地材料點。Caster 曲面掃描不同設計 caster。匯入含左右前輪轉角的 LapSim CSV 可比較前輪過彎 Camber。",
     "static": "靜態全車座標 X 前、Y 左、Z 上，單位 m。Anti 輸入與結果均以朝另一軸為水平正向，結果依各軸力占比加權。",
 }
 
@@ -229,6 +249,25 @@ def with_current_position(spec, page, plot, state, mapping):
 
 def make_plot(page, plot, state=None, mapping=None, engine=None, groups=None, show_static_references=True,
               *, lap=None):
+    if plot == LAP_CAMBER_PLOT[0]:
+        if mapping is None:
+            return None
+        axle = "後軸" if page == "rear" else "前軸"
+        title = f"{axle}過彎 Camber · {mapping['valid']:,} / {mapping['total']:,} 筆"
+        rows = mapping["rows"]
+        if not rows:
+            return {"title": title, "current_status": "沒有可比較的彎道樣本"}
+        series = LAP_CAMBER_SERIES_BY_PAGE[page]
+        values = np.array([[row[key] for row in rows] for key, _, _, _ in series])
+        first, last = np.floor([values.min()/LAP_CAMBER_BIN_DEG, values.max()/LAP_CAMBER_BIN_DEG]).astype(int)
+        # Include a bin starting at the maximum when it falls exactly on an edge.
+        edges = np.arange(first, last+2)*LAP_CAMBER_BIN_DEG
+        centers = ((edges[:-1]+edges[1:])/2).tolist()
+        return {"title": title, "xlabel": f"Camber (deg) · 每格 {LAP_CAMBER_BIN_DEG:g}° · 輪胎上端向外為正",
+                "ylabel": "樣本數", "bin_edges": edges.tolist(),
+                "series": [{"name": label, "x": centers, "y": np.histogram(angles, edges)[0].tolist(),
+                            "color": color, "hollow": hollow}
+                           for angles, (_, label, color, hollow) in zip(values, series)]}
     if page == "static":
         visible = groups or {"front": True, "rear": True, "sv": True}
         lines = [line(l.points, l.group, color=l.color, dash=l.dash)

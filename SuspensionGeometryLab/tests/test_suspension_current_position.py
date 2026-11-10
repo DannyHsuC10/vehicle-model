@@ -7,8 +7,8 @@ import xml.etree.ElementTree as ET
 
 import numpy as np
 
-from suspension_geometry_lab.analysis import calculate_mapping, make_plot, PLOTS
-from suspension_geometry_lab.charts import LabChart
+from suspension_geometry_lab.analysis import LAP_CAMBER_PLOT, LAP_CAMBER_SERIES, calculate_mapping, make_plot, PLOTS
+from suspension_geometry_lab.charts import BG, LabChart
 from suspension_geometry_lab.engine import Engine
 from suspension_geometry_lab.project import default_project
 
@@ -31,6 +31,50 @@ class CurrentPositionTests(unittest.TestCase):
         p = default_project()
         p["analysis"]["samples"] = 5
         self.engine = Engine(p)
+
+    def test_lap_camber_histogram_uses_shared_quarter_degree_bins_and_exports_bars(self):
+        from PIL import Image
+        keys = [entry[0] for entry in LAP_CAMBER_SERIES]
+        values = ((-.5, -.25, -.01, 0, .25), (-.375, -.125, 0, .125, .375),
+                  (-.5, -.25, .25, .5, .5), (-.25, 0, .25, .5, .5))
+        rows = [dict(zip(keys, angles)) for angles in zip(*values)]
+        spec = make_plot("front", LAP_CAMBER_PLOT[0], mapping={"rows": rows, "valid": 5, "total": 5})
+        self.assertEqual(spec["bin_edges"], [-.5, -.25, 0., .25, .5, .75])
+        self.assertEqual([series["y"] for series in spec["series"]],
+                         [[1, 2, 1, 1, 0], [1, 1, 2, 1, 0], [1, 1, 0, 1, 2], [0, 1, 1, 1, 2]])
+        chart = chart_for(spec)
+        self.assertEqual(chart.view[2], 0)
+        left, top, right, _ = chart.bounds
+        xmin, xmax, _, _ = chart.view
+        chart.hover(Mock(x=left+(-.125-xmin)/(xmax-xmin)*(right-left), y=top+40))
+        hover = chart.canvas.create_text.call_args.kwargs["text"]
+        self.assertIn("-0.25° ～ 0°", hover)
+        self.assertIn("內側 · 純車身姿態 2", hover)
+        ns = "{http://www.w3.org/2000/svg}"
+        rects = ET.fromstring(chart.svg()).findall(ns+"rect")[1:]
+        self.assertEqual(len(rects), 20)  # 16 nonzero bars and 4 legend swatches.
+        self.assertEqual((rects[0].attrib["fill"], rects[0].attrib["stroke"]), (BG, "#38bdf8"))
+        filled = next(rect for rect in rects if rect.attrib["fill"] == "#38bdf8")
+        x = float(filled.attrib["x"])+float(filled.attrib["width"])/2
+        y = float(filled.attrib["y"])+float(filled.attrib["height"])/2
+        stream = BytesIO()
+        stream.name = "camber-histogram.png"
+        chart.png(stream)
+        with Image.open(stream) as image:
+            self.assertEqual(image.getpixel((round(x*2), round(y*2))), (56, 189, 248))
+
+        view, bounds = chart.view.copy(), chart.bounds
+        bar = next(item for item in chart.primitives if item[0] == "rect" and item[2] == "#38bdf8")
+        chart.set({**spec, "hidden_series": ["內側 · 純車身姿態"]}, preserve_view=True)
+        self.assertEqual((chart.view, chart.bounds), (view, bounds))
+        self.assertIn(bar, chart.primitives)
+        self.assertNotIn("內側 · 純車身姿態", chart.svg())
+        chart.hover(Mock(x=left+(-.125-xmin)/(xmax-xmin)*(right-left), y=top+40))
+        self.assertNotIn("內側 · 純車身姿態", chart.canvas.create_text.call_args.kwargs["text"])
+        chart.set({**spec, "hidden_series": [series["name"] for series in spec["series"]]}, preserve_view=True)
+        self.assertEqual((chart.view, chart.bounds), (view, bounds))
+        self.assertIn("請勾選要顯示的類別", chart.svg())
+        self.assertFalse(any(item[0] == "rect" for item in chart.primitives))
 
     def test_surfaces_and_center_maps_use_exact_live_pose_in_both_modes(self):
         e = self.engine
