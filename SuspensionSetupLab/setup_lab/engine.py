@@ -7,7 +7,8 @@ import math
 
 import numpy as np
 
-from .project import AXES, CHANNELS, CORNERS, compile_project, model_channels, model_corners
+from .project import (AERO_DEFAULTS, AXES, CHANNELS, CORNERS, compile_project, downforce, model_channels,
+                      model_corners)
 from .road import Road
 from .road_profiles import ISO_FREQUENCY_BAND
 
@@ -37,7 +38,8 @@ class Vehicle:
         full_mu = np.array([project["tires"][c]["mu"] for c in CORNERS])
         mu = full_mu[wheel_indices]
         full_sprung = p["m"] - sum(full_mu)
-        corner_sprung = (full_sprung / 2 * np.array([front, front, rear, rear]))[wheel_indices]
+        axle_shares = np.array([front, front, rear, rear])[wheel_indices]
+        corner_sprung = full_sprung / 2 * axle_shares
         self.sprung = full_sprung if self.nw == 4 else sum(corner_sprung)
         self.total_mass = p["m"] if self.nw == 4 else self.sprung + sum(mu)
         half_f, half_r = p["tf"] / 2, p["tr"] / 2
@@ -76,7 +78,11 @@ class Vehicle:
         self.tire_k = np.array([project["tires"][c]["k"] * 1000 for c in self.corners])
         self.tire_c = np.array([project["tires"][c]["c"] for c in self.corners])
         self.weight = np.array([-G * self.sprung, *([0.] * (self.nb - 1)), *(-G * mu)])
-        self.nominal_load = G * (mu + corner_sprung)
+        aero = project.get("aero", AERO_DEFAULTS)
+        self.aero_downforce = downforce(aero, project["case"]["speed"] * 3.6) if aero["enabled"] else 0.
+        corner_aero = self.aero_downforce / 2 * axle_shares
+        self.aero_load = self.aero_downforce if self.nw == 4 else float(sum(corner_aero))
+        self.nominal_load = G * (mu + corner_sprung) + corner_aero
         self.roll_split = np.array([front, rear])
         self.rc_transfer = (self.modal[2] * front * p["h_rc_f"] / p["tf"]
                             + self.modal[3] * rear * p["h_rc_r"] / p["tr"])
@@ -105,6 +111,8 @@ class Vehicle:
         tire = self.tire_load(q, v, height, road_velocity)
         p = self.p
         total = self.weight - self.travel.T @ suspension
+        # Downforce acts vertically at the sprung centre of gravity.
+        total[0] -= self.aero_load
         total[self.nb:] += tire
         twist_moment = 0.
         if self.flex:
@@ -296,6 +304,9 @@ def make_result(vehicle, road, project, equilibrium, time, history, steps, cance
     for index, (active, label) in enumerate(zip(vehicle.axes, ("縱向加速度", "側向加速度"))):
         if active:
             add("輸入", label, "m/s²", command[:, index])
+    add("空力", "全車下壓力", "N", np.full_like(time, vehicle.aero_downforce))
+    if vehicle.nw < 4:
+        add("空力", "模型承受下壓力", "N", np.full_like(time, vehicle.aero_load))
     travel = q @ vehicle.travel.T * 1000
     elapsed = np.diff(time)
     metrics = {}
@@ -314,13 +325,15 @@ def make_result(vehicle, road, project, equilibrium, time, history, steps, cance
             warnings.append(f"{corner} 出現零輪荷，約 {air_time:.4f} s（依輸出取樣估算）。")
     if road.iso:
         groups["ISO 路面"] = [f"路面 {corner} [mm]" for corner in vehicle.corners]
-    for i, _ in vehicle.active:
+    for i, component in vehicle.active:
         key = tuple(CHANNELS)[i]
         group = CHANNELS[key]
         labels = ("模態／輪端反力", "軸心行程", "軸心速度", "彈簧力", "阻尼力", "限位塊力")
         for j, (label, unit) in enumerate(zip(labels, ("N", "mm", "m/s", "N", "N", "N"))):
             add(group, f"{group} {label}", unit, readings[:, i, j])
-        if np.any(readings[:, i, 5] != 0):
+        stroke = readings[:, i, 1]
+        if (component.jounce_rate and np.any(stroke > component.jounce)
+                or component.rebound_rate and np.any(stroke < -component.rebound)):
             warnings.append(f"{group} 觸及行程限位。")
     if nb > 1 and np.max(np.abs(q[:, 1:nb])) > .15:
         warnings.append("車身姿態超過約 8.6°，小角度幾何誤差可能增大。")
@@ -332,7 +345,7 @@ def make_result(vehicle, road, project, equilibrium, time, history, steps, cance
         warnings.append("模擬結束時，加速度仍未升至設定值。")
     heave_a2 = acceleration[:, 0]**2
     metrics["body_rms"] = math.sqrt(np.sum((heave_a2[1:] + heave_a2[:-1]) * elapsed / 2) / time[-1])
-    signature = (project["model"], vehicle.corners, road.signature())
+    signature = (project["model"], vehicle.corners, road.signature(), project["case"]["speed"])
     # Metres at the body attachment, wheel centre offset and road for each corner.
     motion = np.stack((q[:, :nb] @ vehicle.B.T, q[:, nb:], roads), axis=-1)
     return Result(time, signals, groups, project, signature, metrics, warnings, steps, vehicle.corners, motion)

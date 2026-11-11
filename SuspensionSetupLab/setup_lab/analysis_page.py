@@ -8,7 +8,7 @@ from tkinter import filedialog, ttk
 import numpy as np
 
 from .chart_base import COLORS
-from .project import (AXES, BUMP_CASES, CASE_DEFAULTS, CASE_FIELDS, CORNERS, MANEUVER_CASES, MODELS,
+from .project import (AERO_DEFAULTS, AXES, BUMP_CASES, CASE_DEFAULTS, CASE_FIELDS, CORNERS, MANEUVER_CASES, MODELS,
                       MODEL_SOURCES, PAGE_MODELS, SCENARIOS, TARGET_WHEELS, case_axes, model_corners,
                       read_recording, save_project)
 from .road_profiles import ISO_ROUGHNESS
@@ -184,15 +184,13 @@ class AnalysisPage(ttk.Frame):
             previous = TARGET_WHEELS[key_for(TARGET_LABELS, self.target.get())]
             matching = [corner for corner in corners if corner in previous]
             self.target.set(TARGET_LABELS[matching[0] if len(matching) == 1 else "all"])
-        active = {"dt"}
+        active = {"dt", "speed"}
         if scenario != "csv":
             active.update(("duration", "start"))
         if bump:
             active.update(("height", "period"))
-            if has_ax and self.rear_delay.get():
-                active.add("speed")
         if iso:
-            active.update(("speed", "seed"))
+            active.add("seed")
         if ax or ay:
             active.add("ramp")
             active.update(key for key, enabled in (("ax", ax), ("ay", ay)) if enabled)
@@ -276,6 +274,13 @@ class AnalysisPage(ttk.Frame):
                 self.metrics.insert("", "end", values=(corner, *(f"{value:.2f}" for value in values[:-1]), f"{values[-1]:.4f}"))
             lines = [f"車身升沉加速度 RMS　{result.metrics['body_rms']:.3f} m/s²",
                      f"靜態輪荷總計　{sum(result.metrics[c][0] for c in result.corners):.1f} N　｜　積分嘗試 {result.steps:,} 步"]
+            if result.project.get("aero", AERO_DEFAULTS)["enabled"]:
+                force = result.signals["全車下壓力 [N]"][0]
+                speed = result.project["case"]["speed"] * 3.6
+                line = f"空力　{speed:g} km/h　｜　全車下壓力 {force:,.1f} N"
+                if "模型承受下壓力 [N]" in result.signals:
+                    line += f"　｜　模型承受 {result.signals['模型承受下壓力 [N]'][0]:,.1f} N"
+                lines.append(line)
             if baseline:
                 lines.append(f"B − A 車身升沉加速度 RMS　{result.metrics['body_rms'] - baseline.metrics['body_rms']:+.3f} m/s²")
                 changes = [f"{c} {result.metrics[c][1] - baseline.metrics[c][1]:+.1f}" for c in result.corners]

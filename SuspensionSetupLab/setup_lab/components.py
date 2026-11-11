@@ -1,10 +1,12 @@
 """Replaceable KC laws adapted from new/dynamics_analyze/model/KC_sys."""
 
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from itertools import accumulate
 import math
 
 MAX_CURVE_POINTS = 256
+DAMPER_DIRECTIONS = ("compression", "rebound")
+DAMPER_STAGE_COUNTS = {"single": 1, "split": 1, "bilinear": 2}
 
 
 def number(value, label, minimum=None, maximum=None):
@@ -46,6 +48,16 @@ def damper_points(rows, label, *, stages):
     if table[0][0] != 0 or (not stages and (table[0][1] != 0 or len(table) < 2)):
         raise ValueError(f"{label}係數表須由速度 0 起算，力表至少兩列且從 (0, 0) 起算。")
     return table
+
+
+def damper_kinds(kind):
+    # Old projects store one type for both directions.
+    if isinstance(kind, str) and kind in DAMPER_STAGE_COUNTS:
+        kind = "stages"
+    kinds = kind.copy() if isinstance(kind, dict) else dict.fromkeys(DAMPER_DIRECTIONS, kind)
+    if kinds.keys() != set(DAMPER_DIRECTIONS) or any(value not in ("stages", "force") for value in kinds.values()):
+        raise ValueError("無法辨識阻尼曲線類型。")
+    return kinds
 
 
 class Curve:
@@ -98,41 +110,73 @@ class KCSystem:
         self.rebound = number(settings["rebound_mm"], "伸長限位行程", 0)
         self.jounce_rate = number(settings["jounce_rate"], "壓縮限位剛性", 0)
         self.rebound_rate = number(settings["rebound_rate"], "伸長限位剛性", 0)
+        limit_mode = settings.get("limit_rate_mode", "additive")
+        if limit_mode not in ("additive", "total"):
+            raise ValueError("無法辨識限位剛性類型。")
+        self.total_limit_rate = limit_mode == "total"
         self.spring_kind = settings["spring_kind"]
-        if self.spring_kind not in ("stages", "tender", "force"):
+        if self.spring_kind not in ("single", "stages", "tender", "force"):
             raise ValueError("無法辨識彈簧曲線類型。")
-        if self.spring_kind == "tender":
-            main = number(settings["main_rate"], "主簧剛性", 1e-6)
-            tender = number(settings["tender_rate"], "Tender 剛性", 1e-6)
-            travel = number(settings["tender_travel"], "Tender 併圈前行程", 1e-6)
-            rate = main * (tender / (main + tender))
-            bind = travel * (1 + tender / main)
-            self.spring = Curve([(0, rate), (bind, main)], stages=True).integrated
+        if self.spring_kind in ("single", "tender"):
+            main = number(settings["main_rate"], "彈簧／主簧剛性", 1e-6 if self.spring_kind == "tender" else 0.)
+            table = [(0., main)]
+            if self.spring_kind == "tender":
+                tender = number(settings["tender_rate"], "Tender 剛性", 1e-6)
+                travel = number(settings["tender_travel"], "Tender 併圈前行程", 1e-6)
+                rate = main * (tender / (main + tender))
+                bind = travel * (1 + tender / main)
+                table = [(0., rate), (bind, main)]
+            self.spring_curve = Curve(table, stages=True)
         else:
             stages = self.spring_kind == "stages"
             table = spring_points(settings["spring"], stages=stages)
-            curve = Curve(table, stages=stages, extrapolate=not stages)
-            self.spring = curve.integrated if stages else curve.lookup
+            self.spring_curve = Curve(table, stages=stages, extrapolate=not stages)
+        self.spring = self.spring_curve.integrated if self.spring_curve.stages else self.spring_curve.lookup
+        if self.total_limit_rate:
+            self.jounce_force = self.spring_force(self.jounce)
+            self.rebound_force = self.spring_force(-self.rebound)
 
         damper_kind = settings["damper_kind"]
-        if damper_kind not in ("stages", "force"):
-            raise ValueError("無法辨識阻尼曲線類型。")
+        kinds = damper_kinds(damper_kind)
+        stage_count = DAMPER_STAGE_COUNTS.get(damper_kind) if isinstance(damper_kind, str) else None
         self.dampers = []
         for key, label in (("compression", "壓縮阻尼"), ("rebound", "回彈阻尼")):
-            stages = damper_kind == "stages"
+            stages = kinds[key] == "stages"
             table = damper_points(settings[key], label, stages=stages)
+            if stage_count is not None and len(table) != stage_count:
+                raise ValueError(f"{label}需要 {stage_count} 段係數。")
             curve = Curve(table, stages=stages)
             self.dampers.append(curve.integrated if stages else curve.lookup)
+        if damper_kind == "single" and settings["compression"][0][1] != settings["rebound"][0][1]:
+            raise ValueError("一段式阻尼的壓縮與回彈須使用同一個係數。")
         self.motion_ratio = Curve(points(settings["mr"], "運動比曲線", minimum_y=1e-6))
 
     def spring_force(self, stroke_mm):
-        force = self.spring(stroke_mm + self.offset)
-        return max(0.0, force) if self.spring_kind == "tender" else force
+        return self.spring(stroke_mm + self.offset)
+
+    def spring_breakpoints(self):
+        """Return the spring curve's points in installed shaft coordinates."""
+        return tuple(x - self.offset for x in self.spring_curve.x)
+
+    def spring_slope(self, stroke_mm, *, from_right):
+        curve = self.spring_curve
+        bisect = bisect_right if from_right else bisect_left
+        index = bisect(curve.x, stroke_mm + self.offset) - 1
+        rates = curve.y if curve.stages else curve.slopes
+        return rates[min(max(index, 0), len(rates) - 1)]
 
     def damper_force(self, speed):
         return self.dampers[0](speed) if speed >= 0 else -self.dampers[1](-speed)
 
     def stop_force(self, stroke_mm):
+        if self.total_limit_rate:
+            if self.jounce_rate and stroke_mm > self.jounce:
+                limited = self.jounce_force + self.jounce_rate * (stroke_mm - self.jounce)
+            elif self.rebound_rate and stroke_mm < -self.rebound:
+                limited = self.rebound_force + self.rebound_rate * (stroke_mm + self.rebound)
+            else:
+                return 0.0
+            return limited - self.spring_force(stroke_mm)
         return (self.jounce_rate * max(0.0, stroke_mm - self.jounce)
                 - self.rebound_rate * max(0.0, -stroke_mm - self.rebound))
 

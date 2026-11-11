@@ -9,37 +9,67 @@ from tkinter import filedialog, messagebox, ttk
 import numpy as np
 
 from .analysis_page import AnalysisPage
+from .aero_page import AeroPage
 from .chart_base import Chart
-from .components import KCSystem
+from .components import DAMPER_DIRECTIONS, DAMPER_STAGE_COUNTS, KCSystem, damper_kinds
 from .engine import Cancelled, simulate
-from .project import (APP, CHANNELS, COMPONENT_FIELDS, CORNERS, DEFAULT_SOURCES, MODEL_PAGE, MODEL_SOURCES,
-                      PAGE_MODELS, TIRE_FIELDS, VEHICLE_FIELDS, analysis_page_cases, compile_project, default_project, model_channels,
-                      model_corners, open_project, read_force_csv, save_project)
-from .widgets import entry, key_for, option
+from .project import (AERO_DEFAULTS, APP, CHANNELS, COMPONENT_FIELDS, CORNERS, DAMPER_FORCE_LABELS, DEFAULT_SOURCES,
+                      MODEL_PAGE, MODEL_SOURCES, PAGE_MODELS, TIRE_FIELDS, VEHICLE_FIELDS, analysis_page_cases,
+                      compile_project, default_project, model_channels, model_corners, open_project, read_force_csv,
+                      save_project, with_total_limit_rates)
+from .widgets import entry, key_for
 
-SPRINGS = {"stages": "多段剛性", "tender": "主簧＋Tender", "force": "彈簧力表"}
-DAMPERS = {"stages": "多段阻尼係數", "force": "測功機力表"}
-TABLES = {"spring": "彈簧", "compression": "壓縮阻尼", "rebound": "回彈阻尼", "mr": "運動比 MR"}
+SPRINGS = {"single": "單一彈簧", "tender": "主簧＋Tender", "force": "查表彈簧剛性", "stages": "舊專案彈簧曲線"}
+DAMPER_MODES = {"single": "一段式阻尼（1 段）", "split": "壓縮回彈阻尼（2 段）",
+                "bilinear": "壓縮回彈高低速阻尼（4 段）", "force": "查表阻尼", "legacy": "舊專案阻尼曲線"}
+MR_MODES = {"fixed": "固定運動比", "lookup": "查表運動比"}
+DAMPER_FIELDS = {
+    "single": {"rate": "阻尼係數 (N·s/m)"},
+    "split": {side: f"{label} (N·s/m)" for side, label in DAMPER_FORCE_LABELS.items()},
+    "bilinear": {
+        f"{side}{suffix}": f"{label}{name} ({unit})"
+        for suffix, name, unit in (("", "低速係數", "N·s/m"), ("_high", "高速係數", "N·s/m"),
+                                   ("_switch", "切換速度", "m/s"))
+        for side, label in (("compression", "壓縮"), ("rebound", "回彈"))
+    },
+}
+CURVE_LABELS = {"spring": "彈簧力表", "dampers": "阻尼力表", "mr": "運動比"}
 PAGE_TITLES = {"full": "全車", "half_lr": "1/2 左右", "half_fr": "1/2 前後", "quarter": "1/4 車"}
 
 
-def table_text(rows):
-    return "\n".join(f"{x}\t{y}" for x, y in rows)
+def elastic_curve(component):
+    low, high = -1.1 * component.rebound, 1.1 * component.jounce
+    if low == high:
+        low, high = -1., 1.
+    breaks = (*component.spring_breakpoints(), -component.rebound, 0., component.jounce)
+    stroke = np.array(sorted({low, high, *(x for x in breaks if low < x < high)}))
+    spring = np.array([component.spring_force(x) for x in stroke])
+    stops = np.array([component.stop_force(x) for x in stroke])
+    return stroke, spring, stops
 
 
-def parse_table(raw, label):
-    rows = []
-    for line, text in enumerate(raw.splitlines(), 1):
-        columns = text.replace(",", " ").split()
-        if not columns:
-            continue
-        try:
-            if len(columns) != 2:
-                raise ValueError()
-            rows.append([float(value) for value in columns])
-        except ValueError as exc:
-            raise ValueError(f"{label}第 {line} 列需要兩個數值。") from exc
-    return rows
+def motion_ratio_chart(component):
+    curve = component.motion_ratio
+    extent = max(50., max(map(abs, curve.x)))
+    travel = sorted({-extent, *curve.x, extent})
+    return {"title": "運動比曲線", "xlabel": "輪端／模態行程 (mm)", "ylabel": "MR",
+            "series": [{"x": travel, "y": [curve.lookup(x) for x in travel]}]}
+
+
+def damper_mode(settings):
+    kind = settings["damper_kind"]
+    if isinstance(kind, str) and kind in DAMPER_MODES:
+        return kind
+    kinds = set(damper_kinds(kind).values())
+    if kinds == {"force"}:
+        return "force"
+    if kinds == {"stages"}:
+        compression, rebound = (settings[side] for side in DAMPER_DIRECTIONS)
+        if len(compression) == len(rebound) == 1:
+            return "single" if compression[0][1] == rebound[0][1] else "split"
+        if len(compression) == len(rebound) == 2:
+            return "bilinear"
+    return "legacy"
 
 
 class SetupApp:
@@ -70,6 +100,8 @@ class SetupApp:
         for key, page in self.analysis_pages.items():
             self.pages.add(page, text=f"  {PAGE_TITLES[key]}  ")
         self.build_vehicle()
+        self.aero_page = AeroPage(self)
+        self.pages.add(self.aero_page, text="  空力  ")
         self.build_components()
         self.set_project(self.project, path)
         self.pages.bind("<<NotebookTabChanged>>", self.tab_changed)
@@ -115,54 +147,75 @@ class SetupApp:
         options = ttk.Frame(edit)
         options.pack(fill="x")
         self.enabled = tk.BooleanVar()
-        self.spring_kind, self.damper_kind = tk.StringVar(), tk.StringVar()
+        self.spring_kind = tk.StringVar()
+        self.damper_kind = tk.StringVar()
         ttk.Checkbutton(options, text="啟用此通道", variable=self.enabled, command=self.capture_component).pack(side="left", padx=(0, 8))
-        for choices, variable in ((SPRINGS, self.spring_kind), (DAMPERS, self.damper_kind)):
-            combo = option(options, choices, variable, 16)
-            combo.pack(side="left", padx=(0, 6))
-            combo.bind("<<ComboboxSelected>>", lambda event: self.component_mode())
-        ttk.Button(options, text="預覽元件曲線", command=self.preview).pack(side="right")
+        self.spring_selector = ttk.Combobox(options, textvariable=self.spring_kind, state="readonly", width=17,
+                                            values=(SPRINGS["single"], SPRINGS["tender"], SPRINGS["force"]))
+        self.spring_selector.pack(side="left")
+        self.spring_selector.bind("<<ComboboxSelected>>", lambda event: self.component_mode())
+        self.damper_selector = ttk.Combobox(options, textvariable=self.damper_kind, state="readonly", width=27,
+                                            values=tuple(DAMPER_MODES[key] for key in (*DAMPER_STAGE_COUNTS, "force")))
+        self.damper_selector.pack(side="left", padx=(8, 0))
+        self.damper_selector.bind("<<ComboboxSelected>>", lambda event: self.change_damper_mode())
+        imports = ttk.Frame(edit)
+        imports.pack(fill="x", pady=(7, 0))
+        self.curve_import_buttons = {}
+        for column, (key, label) in zip((0, 1, 3), CURVE_LABELS.items()):
+            button = ttk.Button(imports, text=f"匯入{label} CSV", command=lambda table=key: self.import_force_csv(table))
+            button.grid(row=0, column=column, sticky="w", padx=(0, 5))
+            self.curve_import_buttons[key] = button
+        self.mr_kind, self.mr_var = tk.StringVar(), tk.StringVar()
+        self.mr_selector = ttk.Combobox(imports, textvariable=self.mr_kind, state="readonly", width=15,
+                                        values=tuple(MR_MODES.values()))
+        self.mr_selector.grid(row=0, column=2, sticky="w", padx=(0, 5))
+        self.mr_selector.bind("<<ComboboxSelected>>", lambda event: self.change_mr_mode())
         self.component_vars = {key: tk.StringVar() for key in COMPONENT_FIELDS}
-        numeric = ttk.LabelFrame(edit, text="安裝、串聯彈簧與行程限位", padding=8)
+        numeric = ttk.LabelFrame(edit, text="彈簧、阻尼、運動比與安裝", padding=8)
         numeric.pack(fill="x", pady=7)
-        self.component_widgets = {}
+        self.component_inputs = {}
         for index, (key, label) in enumerate(COMPONENT_FIELDS.items()):
-            self.component_widgets[key] = entry(numeric, index // 2, index % 2 * 2, label, self.component_vars[key])
-        ttk.Label(edit, text="每行兩欄，可直接貼上試算表。分隔符號可用 Tab、空白或逗號，速度為各方向的正值。",
-                  wraplength=725).pack(anchor="w", pady=(0, 5))
-        tables = ttk.Frame(edit)
-        tables.pack(fill="both", expand=True)
-        self.tables, self.table_frames = {}, {}
-        self.damper_import_buttons = []
-        for index, (key, label) in enumerate(TABLES.items()):
-            row, column = divmod(index, 2)
-            tables.rowconfigure(row, weight=1)
-            tables.columnconfigure(column, weight=1, uniform="curves")
-            frame = self.table_frames[key] = ttk.LabelFrame(tables, text=label, padding=5)
-            frame.grid(row=row, column=column, sticky="nsew", padx=(0, 5), pady=(0, 5))
-            if key != "mr":
-                actions = ttk.Frame(frame)
-                actions.pack(fill="x", pady=(0, 4))
-                button = ttk.Button(actions, text="匯入力表 CSV", command=lambda table=key: self.import_force_csv(table))
-                button.pack(side="left")
-                if key in ("compression", "rebound"):
-                    self.damper_import_buttons.append(button)
-                if key == "compression":
-                    ttk.Button(actions, text="匯入雙向 CSV", command=lambda: self.import_force_csv("dampers")).pack(side="left", padx=5)
-            scroll = ttk.Scrollbar(frame)
-            scroll.pack(side="right", fill="y")
-            field = self.tables[key] = tk.Text(frame, height=4, width=22, wrap="none", undo=True,
-                                                font=("Consolas", 10), yscrollcommand=scroll.set)
-            field.pack(fill="both", expand=True)
-            scroll.configure(command=field.yview)
+            row, column = index // 2, index % 2 * 2
+            caption = ttk.Label(numeric, text=label)
+            caption.grid(row=row, column=column, sticky="w", padx=(0, 8), pady=4)
+            field = ttk.Entry(numeric, textvariable=self.component_vars[key], width=12)
+            field.grid(row=row, column=column + 1, sticky="ew", padx=(0, 14), pady=4)
+            self.component_inputs[key] = (caption, field)
+        self.mr_fixed_form = ttk.Frame(numeric)
+        self.mr_fixed_form.grid(row=0, column=4, sticky="w")
+        entry(self.mr_fixed_form, 0, 0, "固定 MR", self.mr_var, width=8)
+        self.damper_vars = {key: tk.StringVar() for key in ("rate", *DAMPER_FIELDS["bilinear"])}
+        self.damper_forms = {}
+        for mode, fields in DAMPER_FIELDS.items():
+            form = ttk.Frame(numeric)
+            form.grid(row=4, columnspan=4, sticky="ew")
+            form.grid_remove()
+            self.damper_forms[mode] = form
+            for index, (key, label) in enumerate(fields.items()):
+                entry(form, index // 2, index % 2 * 2, label, self.damper_vars[key])
+        self.curve_message = ttk.Label(edit)
+        charts = ttk.Frame(edit)
+        charts.pack(fill="both", expand=True)
+        charts.rowconfigure(0, weight=1)
+        self.spring_chart, self.damper_chart, self.mr_chart = (Chart(charts, min_width=220) for _ in range(3))
+        for column, chart in enumerate((self.spring_chart, self.damper_chart, self.mr_chart)):
+            charts.columnconfigure(column, weight=1, uniform="curves")
+            chart.canvas.configure(width=230, height=280)
+            chart.grid(row=0, column=column, sticky="nsew", padx=(0, 5))
         self.current_channel = None
+        self.component_draw_job = None
+        edit.bind("<Destroy>", self.cancel_component_draw)
+        for variable in (*self.component_vars.values(), *self.damper_vars.values(), self.mr_var):
+            variable.trace_add("write", self.schedule_component_draw)
 
     def set_project(self, project, path):
+        project = with_total_limit_rates(project)
         self.project, self.path = project, path
         sources = {**DEFAULT_SOURCES, **project.get("model_sources", {})}
         for key, source in sources.items():
             self.source_vars[key].set(MODEL_SOURCES[key][source])
         self.name.set(project["name"])
+        self.aero_page.set_settings(project.get("aero", AERO_DEFAULTS))
         for key, var in self.vehicle_vars.items():
             var.set(project["vehicle"][key])
         for corner, variables in self.tire_vars.items():
@@ -170,8 +223,10 @@ class SetupApp:
                 var.set(project["tires"][corner][key])
         self.drafts = {}
         for key, component in project["channels"].items():
-            self.drafts[key] = {**component, **{name: table_text(component[name]) for name in TABLES},
-                                **{name: str(component[name]) for name in COMPONENT_FIELDS}}
+            self.drafts[key] = component.copy()
+        self.spring_lookups = {key for key, draft in self.drafts.items() if draft["spring_kind"] == "force"}
+        self.damper_drafts = {}
+        self.mr_drafts = {}
         self.current_channel = None
         self.analysis = None
         active = MODEL_PAGE[project["model"]]
@@ -196,6 +251,8 @@ class SetupApp:
         if page is not None:
             self.analysis = page
             self.refresh_channels()
+        elif selected == str(self.aero_page):
+            self.aero_page.draw()
 
     def refresh_channels(self):
         model = self.analysis.model_key
@@ -213,10 +270,19 @@ class SetupApp:
         key = self.current_channel
         if key is None:
             return
-        self.drafts[key].update(enabled=self.enabled.get(), spring_kind=key_for(SPRINGS, self.spring_kind.get()),
-                                damper_kind=key_for(DAMPERS, self.damper_kind.get()))
-        self.drafts[key].update({name: var.get() for name, var in self.component_vars.items()})
-        self.drafts[key].update({name: widget.get("1.0", "end-1c") for name, widget in self.tables.items()})
+        draft = self.drafts[key]
+        draft.update(enabled=self.enabled.get(), spring_kind=key_for(SPRINGS, self.spring_kind.get()))
+        draft.update({name: var.get() for name, var in self.component_vars.items()})
+        mode = self.active_damper_mode
+        if mode in DAMPER_STAGE_COUNTS:
+            for side in DAMPER_DIRECTIONS:
+                rate = self.damper_vars["rate" if mode == "single" else side].get()
+                draft[side] = [[0, rate]]
+                if mode == "bilinear":
+                    draft[side].append([self.damper_vars[f"{side}_switch"].get(),
+                                        self.damper_vars[f"{side}_high"].get()])
+        if self.active_mr_mode == "fixed":
+            draft["mr"] = [[draft["mr"][0][0], self.mr_var.get()]]
         self.show_channel_state(key)
 
     def show_channel_state(self, key):
@@ -232,35 +298,117 @@ class SetupApp:
         draft = self.drafts[self.current_channel]
         self.enabled.set(draft["enabled"])
         self.spring_kind.set(SPRINGS[draft["spring_kind"]])
-        self.damper_kind.set(DAMPERS[draft["damper_kind"]])
         for key, var in self.component_vars.items():
             var.set(draft[key])
-        for key, widget in self.tables.items():
-            widget.configure(state="normal")
-            widget.delete("1.0", "end")
-            widget.insert("1.0", draft[key])
-            widget.edit_reset()
+        self.load_curve_controls()
         self.component_mode()
 
     def component_mode(self):
         spring = key_for(SPRINGS, self.spring_kind.get())
-        damper = key_for(DAMPERS, self.damper_kind.get())
-        self.tables["spring"].configure(state="disabled" if spring == "tender" else "normal")
-        self.table_frames["spring"].configure(text={"stages": "彈簧｜起始行程 mm ／剛性 N/mm",
-                                                    "force": "彈簧｜行程 mm ／力 N",
-                                                    "tender": "彈簧｜串聯數值由上方欄位設定"}[spring])
-        self.table_frames["mr"].configure(text="運動比｜輪端／模態行程 mm ／MR")
-        unit = "係數 N·s/m" if damper == "stages" else "力 N"
-        for key in ("compression", "rebound"):
-            self.table_frames[key].configure(text=f"{TABLES[key]}｜速度 m/s ／{unit}")
-        for button in self.damper_import_buttons:
-            button.configure(state="normal" if damper == "force" else "disabled")
-        for key in ("main_rate", "tender_rate", "tender_travel"):
-            self.component_widgets[key].configure(state="normal" if spring == "tender" else "disabled")
+        spring_fields = {"main_rate": spring in ("single", "tender"),
+                         "tender_rate": spring == "tender", "tender_travel": spring == "tender"}
+        for key, visible in spring_fields.items():
+            for widget in self.component_inputs[key]:
+                if visible:
+                    widget.grid()
+                else:
+                    widget.grid_remove()
+        fixed_mr = self.active_mr_mode == "fixed"
+        if fixed_mr:
+            self.mr_fixed_form.grid()
+        else:
+            self.mr_fixed_form.grid_remove()
+        for table, visible in (("spring", spring == "force"), ("dampers", self.active_damper_mode == "force"),
+                               ("mr", not fixed_mr)):
+            button = self.curve_import_buttons[table]
+            if visible:
+                button.grid()
+            else:
+                button.grid_remove()
+        self.schedule_component_draw()
+
+    def load_curve_controls(self):
+        draft = self.drafts[self.current_channel]
+        mode = self.active_damper_mode = damper_mode(draft)
+        self.damper_kind.set(DAMPER_MODES[mode])
+        for key, form in self.damper_forms.items():
+            if key == mode:
+                form.grid()
+            else:
+                form.grid_remove()
+        if mode == "single":
+            self.damper_vars["rate"].set(draft["compression"][0][1])
+        elif mode in ("split", "bilinear"):
+            for side in DAMPER_DIRECTIONS:
+                self.damper_vars[side].set(draft[side][0][1])
+                if mode == "bilinear":
+                    speed, rate = draft[side][1]
+                    self.damper_vars[f"{side}_switch"].set(speed)
+                    self.damper_vars[f"{side}_high"].set(rate)
+        lookup_mr = draft.get("mr_mode") == "lookup" or len(draft["mr"]) > 1
+        self.active_mr_mode = "lookup" if lookup_mr else "fixed"
+        self.mr_kind.set(MR_MODES[self.active_mr_mode])
+        if self.active_mr_mode == "fixed":
+            self.mr_var.set(draft["mr"][0][1])
+
+    def change_damper_mode(self):
+        mode = key_for(DAMPER_MODES, self.damper_kind.get())
+        if mode == self.active_damper_mode:
+            return
+        self.capture_component()
+        channel = self.current_channel
+        draft = self.drafts[channel]
+        old_mode = self.active_damper_mode
+        old_kind = old_mode if old_mode in DAMPER_STAGE_COUNTS else draft["damper_kind"]
+        self.damper_drafts[channel, old_mode] = {
+            "damper_kind": old_kind, **{side: draft[side] for side in DAMPER_DIRECTIONS}
+        }
+        previous = self.damper_drafts.get((channel, mode))
+        if previous is not None:
+            draft.update(previous)
+        elif mode == "force":
+            draft.update(damper_kind="force", compression=[], rebound=[])
+        else:
+            source = draft if draft["compression"] else self.project["channels"][channel]
+            kinds = damper_kinds(source["damper_kind"])
+            rows = {}
+            for side, kind in kinds.items():
+                points = source[side]
+                low = points[1][1] / points[1][0] if kind == "force" else points[0][1]
+                rows[side] = [[0, low]]
+                if mode == "bilinear":
+                    high = points[1] if kind == "stages" and len(points) > 1 else [0.1, low]
+                    rows[side].append(high)
+            if mode == "single":
+                rows["rebound"] = rows["compression"].copy()
+            draft.update(damper_kind=mode, **rows)
+        self.load_curve_controls()
+        self.component_mode()
+
+    def change_mr_mode(self):
+        mode = key_for(MR_MODES, self.mr_kind.get())
+        if mode == self.active_mr_mode:
+            return
+        self.capture_component()
+        channel = self.current_channel
+        draft = self.drafts[channel]
+        self.mr_drafts[channel, self.active_mr_mode] = draft["mr"]
+        previous = self.mr_drafts.get((channel, mode))
+        if mode == "lookup":
+            draft["mr_mode"] = "lookup"
+            draft["mr"] = previous if previous is not None else []
+        else:
+            draft.pop("mr_mode", None)
+            if previous is None:
+                travel, ratio = zip(*draft["mr"])
+                previous = [[0, float(np.interp(0, travel, ratio))]]
+            draft["mr"] = previous
+        self.load_curve_controls()
+        self.component_mode()
 
     def import_force_csv(self, table):
-        label = "雙向阻尼" if table == "dampers" else TABLES[table]
-        path = filedialog.askopenfilename(parent=self.root, title=f"匯入{label}力表", filetypes=[("CSV 檔", "*.csv")])
+        label = CURVE_LABELS[table]
+        path = filedialog.askopenfilename(parent=self.root, title=f"匯入{label} CSV", filetypes=[("CSV 檔", "*.csv")])
         if not path:
             return
         try:
@@ -269,24 +417,72 @@ class SetupApp:
             self.error(exc)
             return
 
-        if table == "spring":
-            self.spring_kind.set(SPRINGS["force"])
-        else:
-            self.damper_kind.set(DAMPERS["force"])
-        self.component_mode()
-        for key, rows in curves.items():
-            self.tables[key].replace("1.0", "end-1c", table_text(rows))
         self.capture_component()
-        self.status.set(f"{CHANNELS[self.current_channel]}已匯入{label}力表。")
+        draft = self.drafts[self.current_channel]
+        draft.update(curves)
+        if table == "spring":
+            self.spring_lookups.add(self.current_channel)
+            self.spring_kind.set(SPRINGS["force"])
+        elif table == "dampers":
+            draft["damper_kind"] = "force"
+        elif table == "mr":
+            draft["mr_mode"] = "lookup"
+        self.load_curve_controls()
+        self.component_mode()
+        self.status.set(f"{CHANNELS[self.current_channel]}已匯入{label} CSV。")
 
     def component(self, channel):
         values = self.drafts[channel].copy()
         try:
+            if values["spring_kind"] == "force" and channel not in self.spring_lookups:
+                raise ValueError("請匯入彈簧力表 CSV。")
+            if values["damper_kind"] == "force" and not all(values[side] for side in DAMPER_DIRECTIONS):
+                raise ValueError("請匯入阻尼力表 CSV。")
+            if values.get("mr_mode") == "lookup" and not values["mr"]:
+                raise ValueError("請匯入運動比 CSV。")
             values.update({key: float(values[key]) for key in COMPONENT_FIELDS})
-            values.update({key: parse_table(values[key], TABLES[key]) for key in TABLES})
+            for key in ("spring", *DAMPER_DIRECTIONS, "mr"):
+                values[key] = [[float(x), float(y)] for x, y in values[key]]
         except ValueError as exc:
             raise ValueError(f"{CHANNELS[channel]} 欄位有誤：{exc}") from exc
         return values
+
+    def schedule_component_draw(self, *_):
+        if self.current_channel is not None and self.component_draw_job is None:
+            self.component_draw_job = self.root.after_idle(self.draw_component)
+
+    def cancel_component_draw(self, _event):
+        if self.component_draw_job is not None:
+            self.root.after_cancel(self.component_draw_job)
+            self.component_draw_job = None
+
+    def draw_component(self):
+        self.component_draw_job = None
+        self.capture_component()
+        try:
+            settings = self.component(self.current_channel)
+            component = KCSystem(settings)
+        except ValueError as exc:
+            self.curve_message.configure(text=str(exc))
+            self.curve_message.pack(fill="x", before=self.spring_chart.master)
+            self.spring_chart.set({"series": []})
+            self.damper_chart.set({"series": []})
+            self.mr_chart.set({"series": []})
+            return
+
+        self.curve_message.pack_forget()
+        stroke, spring, stops = elastic_curve(component)
+        self.spring_chart.set({"title": "彈簧與限位合力", "xlabel": "軸心壓縮行程 (mm)", "ylabel": "力 (N)",
+                               "x_range": (stroke[0], stroke[-1]),
+                               "series": [{"x": stroke.tolist(), "y": (spring + stops).tolist()}]})
+
+        compression = [speed for speed, _ in settings["compression"]]
+        rebound = [-speed for speed, _ in settings["rebound"]]
+        extent = max(.4, compression[-1], -rebound[-1])
+        speeds = sorted(set([-extent, *rebound, *compression, extent]))
+        self.damper_chart.set({"title": "阻尼曲線", "xlabel": "軸心速度 (m/s)", "ylabel": "阻尼力 (N)",
+                               "series": [{"x": speeds, "y": [component.damper_force(speed) for speed in speeds]}]})
+        self.mr_chart.set(motion_ratio_chart(component))
 
     def collect(self, page=None, *, include_pages=False):
         self.capture_component()
@@ -300,6 +496,7 @@ class SetupApp:
         except ValueError as exc:
             raise ValueError("車輛與輪胎的欄位須填入數值。") from exc
         project["channels"] = {key: self.component(key) for key in CHANNELS}
+        project["aero"] = self.aero_page.settings()
         if include_pages:
             project["page_cases"] = {key: other.case_input() for key, other in self.analysis_pages.items() if other is not page}
         return project
@@ -308,46 +505,6 @@ class SetupApp:
         project = self.collect(include_pages=True)
         project["page_cases"][self.analysis.family] = {key: project.pop(key) for key in ("model", "case")}
         return project
-
-    def preview(self):
-        self.capture_component()
-        key = self.current_channel
-        try:
-            settings = self.component(key)
-            component = KCSystem(settings)
-        except ValueError as exc:
-            return self.error(exc)
-        window = tk.Toplevel(self.root)
-        window.title(f"{CHANNELS[key]}｜元件台架曲線")
-        window.geometry("825x520")
-        mode = ttk.Combobox(window, values=("彈簧與限位", "阻尼測功曲線", "運動比"), state="readonly")
-        mode.current(0)
-        mode.pack(anchor="w", padx=8, pady=6)
-        chart = Chart(window)
-        chart.pack(fill="both", expand=True)
-
-        def draw(event=None):
-            if mode.current() == 0:
-                x = np.unique(np.r_[np.linspace(-80, 80, 481), -settings["rebound_mm"], settings["jounce_mm"],
-                                    [row[0] - settings["installed_mm"] for row in settings["spring"]]])
-                series = [("彈簧", [component.spring_force(v) for v in x]),
-                          ("限位", [component.stop_force(v) for v in x])]
-                xlabel, ylabel = "軸心壓縮行程 (mm)", "力 (N)"
-            elif mode.current() == 1:
-                extent = max(.4, settings["compression"][-1][0], settings["rebound"][-1][0])
-                x = np.linspace(-extent, extent, 481)
-                series = [("阻尼力", [component.damper_force(v) for v in x])]
-                xlabel, ylabel = "軸心速度 (m/s)", "力 (N)"
-            else:
-                extent = max(50, *(abs(row[0]) for row in settings["mr"]))
-                x = np.linspace(-extent, extent, 481)
-                series = [("MR", [component.motion_ratio.lookup(v) for v in x])]
-                xlabel, ylabel = "輪端／模態行程 (mm)", "運動比"
-            chart.set({"title": mode.get(), "xlabel": xlabel, "ylabel": ylabel,
-                       "series": [{"name": name, "x": x.tolist(), "y": values} for name, values in series]})
-
-        mode.bind("<<ComboboxSelected>>", draw)
-        draw()
 
     def run(self, page=None):
         if self.job is not None:

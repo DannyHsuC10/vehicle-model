@@ -8,17 +8,17 @@ import numpy as np
 from setup_lab.components import KCSystem
 from setup_lab.engine import Cancelled, G, Vehicle, simulate
 from setup_lab.project import (CORNERS, compile_project, default_project, import_linear, linear, open_project,
-                               read_recording, save_project)
+                               read_recording, save_project, with_total_limit_rates)
 from setup_lab.road import Road
 
 
 class ComponentTests(unittest.TestCase):
     def test_multi_stage_spring_and_asymmetric_damper_are_continuous(self):
         settings = linear(10000, 1000)
-        settings.update(spring=[[-10, 5], [0, 10], [10, 20], [20, 40]],
+        settings.update(spring_kind="stages", spring=[[-10, 5], [0, 10], [10, 20], [20, 40]],
                         compression=[[0, 1000], [.05, 500], [.15, 900]],
                         rebound=[[0, 2000], [.05, 1000]], jounce_mm=20, jounce_rate=50,
-                        rebound_mm=15, rebound_rate=30)
+                        rebound_mm=15, rebound_rate=30, limit_rate_mode="additive")
         component = KCSystem(settings)
         for travel, expected in ((-12, -60), (10, 100), (15, 200), (20, 300), (25, 500)):
             self.assertAlmostEqual(component.spring_force(travel), expected)
@@ -27,11 +27,32 @@ class ComponentTests(unittest.TestCase):
         self.assertEqual(component.stop_force(22), 100)
         self.assertEqual(component.stop_force(-17), -60)
 
+    def test_total_limit_rate_overrides_later_spring_breakpoints(self):
+        settings = linear(35000, 0)
+        settings.update(spring_kind="stages", spring=[[0, 35], [12, 120]], jounce_mm=10, jounce_rate=80)
+        component = KCSystem(settings)
+        for stroke, expected in ((9, 315), (10, 350), (11, 430), (13, 590), (20, 1150)):
+            self.assertAlmostEqual(component.force(stroke / 1000, 0.), expected)
+
+    def test_legacy_limit_conversion_uses_the_slope_outside_each_limit(self):
+        project = default_project()
+        settings = project["channels"]["heave_f"]
+        settings.pop("limit_rate_mode")
+        settings.update(spring_kind="stages", spring=[[-20, 15], [-10, 25], [0, 30], [10, 45]],
+                        jounce_mm=10, jounce_rate=80, rebound_mm=10, rebound_rate=40)
+        converted = with_total_limit_rates(project)["channels"]["heave_f"]
+        self.assertEqual((converted["jounce_rate"], converted["rebound_rate"]), (125., 55.))
+        before, after = KCSystem(settings), KCSystem(converted)
+        for travel in (-.04, -.01, 0., .01, .04):
+            self.assertAlmostEqual(before.force(travel, 0.), after.force(travel, 0.))
+
     def test_tender_binding_uses_tender_travel_and_installed_compression(self):
         settings = linear(60000, 1000)
         settings.update(spring_kind="tender", main_rate=60, tender_rate=30, tender_travel=4, installed_mm=2)
         component = KCSystem(settings)
-        self.assertAlmostEqual(component.spring_force(-3), 0)
+        self.assertAlmostEqual(component.spring_force(-3), -20)
+        self.assertAlmostEqual(component.spring_force(-2), 0)
+        self.assertAlmostEqual(component.spring_force(-1), 20)
         self.assertAlmostEqual(component.spring_force(0), 40)
         self.assertAlmostEqual(component.spring_force(4), 120)
         self.assertAlmostEqual(component.spring_force(5), 180)
@@ -62,6 +83,41 @@ class ComponentTests(unittest.TestCase):
 
 
 class ModelTests(unittest.TestCase):
+    def test_downforce_scales_with_case_speed_and_loads_the_static_trim(self):
+        project = default_project()
+        project["case"].update(duration=.3, start=.05, dt=.005, speed=10.)
+        project["aero"].update(reference_speed_kmh=36., reference_force_n=150.)
+        off = simulate(project)
+        project["aero"]["enabled"] = True
+        for speed, expected in ((0., 0.), (10., 150.), (20., 600.)):
+            with self.subTest(speed=speed):
+                project["case"]["speed"] = speed
+                result = simulate(project)
+                np.testing.assert_allclose(result.signals["全車下壓力 [N]"], expected)
+                self.assertAlmostEqual(sum(result.metrics[c][0] for c in CORNERS), 321 * G + expected)
+                self.assertEqual(result.signature == off.signature, speed == 10.)
+        project.pop("aero")
+        project["case"]["speed"] = 10.
+        legacy = simulate(project)
+        np.testing.assert_array_equal(legacy.signals["FL [N]"], off.signals["FL [N]"])
+
+    def test_reduced_models_use_the_selected_corners_share_of_downforce(self):
+        project = default_project()
+        project["vehicle"].update(lf=.6, lr=.9)
+        project["case"]["speed"] = 10.
+        project["aero"].update(enabled=True, reference_speed_kmh=36., reference_force_n=400.)
+        project["model_sources"].update(half_lr="rear", half_fr="right", quarter="FL")
+        for model, expected in (("half_lr", 160.), ("half_fr", 200.), ("quarter", 120.)):
+            with self.subTest(model=model):
+                project["model"] = model
+                project["case"]["target"] = "all"
+                vehicle = Vehicle(project, compile_project(project))
+                zero_wheels = np.zeros(vehicle.nw)
+                inputs = (zero_wheels, zero_wheels, 0., 0.)
+                trim = vehicle.equilibrium(inputs)
+                _, loads, *_ = vehicle.forces(trim, np.zeros(vehicle.n), inputs, True)
+                self.assertAlmostEqual(sum(loads), vehicle.total_mass * G + expected)
+
     def test_trim_balances_weight_and_braking_in_both_models(self):
         project = default_project()
         for model, dof in (("rigid", 7), ("flex", 8)):
@@ -95,6 +151,7 @@ class ModelTests(unittest.TestCase):
 
     def test_component_change_reaches_model_under_identical_input(self):
         project = default_project()
+        project["channels"]["heave_f"]["spring_kind"] = "single"
         project["case"].update(duration=.8, start=.1, dt=.004)
         a = simulate(project)
         heave = project["channels"]["heave_f"]
@@ -105,7 +162,7 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(a.signature, b.signature)
         self.assertGreater(np.max(np.abs(a.signals["FL [N]"] - b.signals["FL [N]"])), 40)
         self.assertGreater(np.max(b.signals["前軸升沉 限位塊力 [N]"]), 0)
-        self.assertEqual(a.project["channels"]["heave_f"]["spring_kind"], "stages")
+        self.assertEqual(a.project["channels"]["heave_f"]["spring_kind"], "single")
 
     def test_unstable_configuration_rejected_and_cancellation(self):
         project = default_project()
@@ -148,7 +205,8 @@ class ReducedModelTests(unittest.TestCase):
     def test_symmetric_heave_uses_same_shaft_curve_as_full_car(self):
         p = default_project()
         p["case"]["target"] = "all"
-        p["channels"]["heave_f"].update(spring=[[0, 20], [15, 80]], compression=[[0, 1000], [.1, 300]],
+        p["channels"]["heave_f"].update(spring_kind="stages", spring=[[0, 20], [15, 80]],
+                                        compression=[[0, 1000], [.1, 300]],
                                         mr=[[0, .9], [30, 1.05]])
         readings = {}
         for model in ("rigid", "quarter", "half_lr", "half_fr"):
@@ -173,7 +231,7 @@ class ReducedModelTests(unittest.TestCase):
                 p["model"] = model
                 p["case"].update(duration=.55, start=.1, dt=.005)
                 baseline = simulate(p)
-                p["channels"][channel].update(spring=[[-3, 18], [0, 25], [3, 80]],
+                p["channels"][channel].update(spring_kind="stages", spring=[[-3, 18], [0, 25], [3, 80]],
                                               compression=[[0, 900], [.04, 400]], rebound=[[0, 2100], [.06, 1100]])
                 adjusted = simulate(p)
                 self.assertEqual(baseline.signature, adjusted.signature)

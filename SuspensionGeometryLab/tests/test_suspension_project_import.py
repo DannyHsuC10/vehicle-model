@@ -149,7 +149,7 @@ class ProjectImportTests(unittest.TestCase):
                   "dynamics": {"tire_f_k": 80000, "tire_r_k": 81000}}
         _, fields = self.read(source)
         self.assertIn("vehicle.tire_stiffness", {field.location for field in fields})
-        for change, error in (({"schema_version": 3}, "schema_version"),
+        for change, error in (({"schema_version": 4}, "schema_version"),
                               ({"geometry": []}, "geometry"),
                               ({"vehicle": {"lf": .75, "lr": "bad"}}, "lr"),
                               ({"dynamics": {"tire_f_k": "bad"}}, "輪胎剛性")):

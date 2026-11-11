@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
-from .components import KCSystem, MAX_CURVE_POINTS, damper_points, number, spring_points
+from .components import KCSystem, MAX_CURVE_POINTS, damper_points, number, points, spring_points
 from .road_profiles import ISO_FREQUENCY_BAND, ISO_ROUGHNESS
 
 
@@ -30,12 +30,15 @@ SCENARIOS = {"bump": "凸塊／凹坑", **{key: f"ISO 8608 Class {key[-1].upper(
 BUMP_CASES = ("bump", "combined")
 MANEUVER_CASES = ("maneuver", "combined")
 CASE_DEFAULTS = {"seed": 0, "iso_lateral": False}
+AERO_DEFAULTS = {"enabled": False, "reference_speed_kmh": 100., "reference_force_n": 500.}
+AERO_FIELDS = {"reference_speed_kmh": ("參考車速 (km/h)", .1, 540),
+               "reference_force_n": ("參考下壓力 (N)", 0, 1e6)}
 TARGET_WHEELS = {**{c: (c,) for c in CORNERS}, "front": CORNERS[:2], "rear": CORNERS[2:],
                  "left": CORNERS[::2], "right": CORNERS[1::2], "all": CORNERS}
 ROAD_HEADER = ("time_s", "z_fl_mm", "z_fr_mm", "z_rl_mm", "z_rr_mm", "ax_mps2", "ay_mps2")
 SPRING_FORCE_HEADER = ("travel_mm", "force_n")
-DAMPER_FORCE_HEADER = ("speed_mps", "force_n")
-DUAL_DAMPER_FORCE_HEADER = ("speed_mps", "compression_n", "rebound_n")
+DAMPER_FORCE_HEADER = ("speed_mps", "compression_n", "rebound_n")
+MR_HEADER = ("travel_mm", "mr")
 DAMPER_FORCE_LABELS = {"compression": "壓縮阻尼", "rebound": "回彈阻尼"}
 VEHICLE_FIELDS = {
     "m": ("總質量 (kg)", 1, 1e5), "lf": ("重心至前軸 (m)", .01, 30), "lr": ("重心至後軸 (m)", .01, 30),
@@ -53,25 +56,43 @@ TIRE_FIELDS = {"mu": ("簧下質量 (kg)", .01, 1e4), "k": ("輪端剛性 (N/mm)
 CASE_FIELDS = {
     "duration": ("模擬時間 (s)", .001, 120), "dt": ("輸出間隔 (s)", .0001, .05),
     "start": ("輸入開始 (s)", 0, 120), "height": ("凸塊高度 (mm)", -1000, 1000),
-    "period": ("通過凸塊時間 (s)", .002, 120), "speed": ("車速 (m/s)", .1, 150),
+    "period": ("通過凸塊時間 (s)", .002, 120), "speed": ("車速 (m/s)", 0, 150),
     "seed": ("路面隨機種子", 0, 2**32 - 1),
     "ax": ("縱向加速度 ax (m/s²)", -100, 100), "ay": ("側向加速度 ay (m/s²)", -100, 100),
     "ramp": ("加速度上升時間 (s)", .002, 120),
 }
 COMPONENT_FIELDS = {
-    "installed_mm": "安裝預壓行程 (mm)", "main_rate": "主簧剛性 (N/mm)",
+    "installed_mm": "安裝預壓行程 (mm)", "main_rate": "彈簧／主簧剛性 (N/mm)",
     "tender_rate": "Tender 剛性 (N/mm)", "tender_travel": "Tender 併圈前行程 (mm)",
-    "jounce_mm": "壓縮限位起點 (mm)", "jounce_rate": "壓縮限位剛性 (N/mm)",
-    "rebound_mm": "伸長限位起點 (mm)", "rebound_rate": "伸長限位剛性 (N/mm)",
+    "jounce_mm": "壓縮限位起點 (mm)", "jounce_rate": "壓縮限位後總剛性 (N/mm)",
+    "rebound_mm": "伸長限位起點 (mm)", "rebound_rate": "伸長限位後總剛性 (N/mm)",
 }
 
 
 def linear(k, c, ratio=1.0):
-    return {"enabled": bool(k or c), "spring_kind": "stages", "spring": [[0, k / 1000]],
+    return {"enabled": bool(k or c), "spring_kind": "single", "spring": [[0, k / 1000]],
             "damper_kind": "stages", "compression": [[0, c]], "rebound": [[0, c]], "mr": [[0, ratio]],
-            "installed_mm": 0., "main_rate": k / 1000 if k > 0 else 35.,
+            "installed_mm": 0., "main_rate": k / 1000,
             "tender_rate": 25., "tender_travel": 4.3, "jounce_mm": 50., "jounce_rate": 0.,
-            "rebound_mm": 50., "rebound_rate": 0.}
+            "rebound_mm": 50., "rebound_rate": 0., "limit_rate_mode": "total"}
+
+
+def with_total_limit_rates(project):
+    """Convert legacy increments using the spring slope just outside each stop."""
+    channels = {}
+    for key, settings in project["channels"].items():
+        if settings.get("limit_rate_mode") == "total":
+            channels[key] = settings
+            continue
+        converted = {**settings, "limit_rate_mode": "total"}
+        if settings["jounce_rate"] or settings["rebound_rate"]:
+            component = KCSystem(settings)
+            if component.jounce_rate:
+                converted["jounce_rate"] += component.spring_slope(component.jounce, from_right=True)
+            if component.rebound_rate:
+                converted["rebound_rate"] += component.spring_slope(-component.rebound, from_right=False)
+        channels[key] = converted
+    return {**project, "channels": channels}
 
 
 def model_corners(model, sources):
@@ -112,11 +133,13 @@ def default_project():
     return {
         "application": APP, "schema_version": 1, "name": "全車懸吊調校", "model": "flex", "notes": [],
         "model_sources": DEFAULT_SOURCES.copy(),
+        "aero": AERO_DEFAULTS.copy(),
         "vehicle": dict(m=321., lf=.765, lr=.765, tf=1.28, tr=1.24, h_cg=.3, Ixx=60., Iyy=100.,
                         h_rc_f=.025, h_rc_r=.025, dive_front=.15, lift_rear=.15, lift_front=.15,
                         squat_rear=.15, body_twist_k=180000., body_twist_c=300.),
         "tires": {c: dict(mu=15., k=80., c=300.) for c in CORNERS},
-        "channels": {"heave_f": linear(35000, 3350), "heave_r": linear(31500, 3175),
+        "channels": {"heave_f": dict(linear(35000, 3350), spring_kind="tender"),
+                     "heave_r": dict(linear(31500, 3175), spring_kind="tender"),
                      "roll_f": linear(20000, 2500), "roll_r": linear(18000, 2400),
                      **{key: linear(0, 0) for key in ("roll_c", "warp", *CORNERS)}},
         "case": dict(scenario="bump", target="FL", duration=2., dt=.002, start=.5, height=15.,
@@ -162,8 +185,8 @@ def read_recording(path):
 
 
 def read_force_csv(path, table):
-    """Load force lookup data into one or both table keys for a component."""
-    header = {"spring": SPRING_FORCE_HEADER, "dampers": DUAL_DAMPER_FORCE_HEADER}.get(table, DAMPER_FORCE_HEADER)
+    """Load the selected force or motion ratio curve."""
+    header = {"spring": SPRING_FORCE_HEADER, "dampers": DAMPER_FORCE_HEADER, "mr": MR_HEADER}[table]
     rows = []
     with Path(path).open(encoding="utf-8-sig", newline="") as stream:
         reader = csv.reader(stream, strict=True)
@@ -177,23 +200,34 @@ def read_force_csv(path, table):
                 if is_header:
                     continue
                 if len(rows) == MAX_CURVE_POINTS:
-                    raise ValueError(f"力表 CSV 最多可匯入 {MAX_CURVE_POINTS} 筆資料。")
+                    raise ValueError(f"曲線 CSV 最多可匯入 {MAX_CURVE_POINTS} 筆資料。")
                 try:
                     if len(row) != len(header):
                         raise ValueError()
                     rows.append([float(cell) for cell in row])
                 except ValueError as exc:
-                    raise ValueError(f"力表 CSV 第 {reader.line_num} 列須有 {len(header)} 個數值。"
+                    raise ValueError(f"曲線 CSV 第 {reader.line_num} 列須有 {len(header)} 個數值。"
                                      f"欄名可省略，若有欄名請使用 {','.join(header)}。") from exc
         except csv.Error as exc:
-            raise ValueError(f"力表 CSV 第 {reader.line_num} 列格式有誤。") from exc
+            raise ValueError(f"曲線 CSV 第 {reader.line_num} 列格式有誤。") from exc
 
     if table == "spring":
         return {table: spring_points(rows, stages=False)}
-    if table == "dampers":
-        return {key: damper_points([[row[0], row[index]] for row in rows], label, stages=False)
-                for index, (key, label) in enumerate(DAMPER_FORCE_LABELS.items(), 1)}
-    return {table: damper_points(rows, DAMPER_FORCE_LABELS[table], stages=False)}
+    if table == "mr":
+        return {table: points(rows, "運動比曲線", minimum_y=1e-6)}
+    return {key: damper_points([[row[0], row[index]] for row in rows], label, stages=False)
+            for index, (key, label) in enumerate(DAMPER_FORCE_LABELS.items(), 1)}
+
+
+def validate_aero(settings):
+    if not isinstance(settings, dict) or type(settings.get("enabled")) is not bool:
+        raise ValueError("空力開關設定有誤。")
+    for key, (label, low, high) in AERO_FIELDS.items():
+        number(settings.get(key), label, low, high)
+
+
+def downforce(settings, speed_kmh):
+    return settings["reference_force_n"] * (speed_kmh / settings["reference_speed_kmh"]) ** 2
 
 
 def compile_project(project):
@@ -219,6 +253,7 @@ def compile_project(project):
     if vehicle["m"] <= sum(project["tires"][c]["mu"] for c in CORNERS):
         raise ValueError("總質量必須大於四輪簧下質量總和。")
 
+    validate_aero(project.get("aero", AERO_DEFAULTS))
     validate_case(model, sources, project["case"])
     for page, setup in analysis_page_cases(project).items():
         if page not in PAGE_MODELS or not isinstance(setup, dict) or setup.get("model") not in PAGE_MODELS[page]:
@@ -249,6 +284,9 @@ def validate_case(model, sources, case):
     if scenario in BUMP_CASES or scenario in ISO_ROUGHNESS:
         if not set(model_corners(model, sources)).intersection(TARGET_WHEELS[case["target"]]):
             raise ValueError("路面作用輪位不在選定模型的輪位中。")
+    delayed_bump = scenario in BUMP_CASES and case["rear_delay"] and AXES[model][0]
+    if (scenario in ISO_ROUGHNESS or delayed_bump) and case["speed"] < .1:
+        raise ValueError("ISO 路面及凸塊後輪延遲需要至少 0.1 m/s 的車速。")
     if scenario in ISO_ROUGHNESS:
         if not float(case.get("seed", CASE_DEFAULTS["seed"])).is_integer():
             raise ValueError("ISO 路面隨機種子須為整數。")
@@ -272,6 +310,11 @@ def import_linear(source):
     full = source.get("parameters", {}).get("full")
     if full is None and source.get("application") == "VehicleInitialSizingLab-DynamicsExport":
         full = {**source["vehicle"], **source["geometry"], **source["dynamics"]}
+        if source.get("schema_version") == 3:
+            # Convert the physical main springs to the model's axle-sum coordinate.
+            for key in ("heave_f_k", "heave_r_k"):
+                if type(full.get(key)) in (int, float):
+                    full[key] /= 4
     if not isinstance(full, dict) or not all(k in full for k in ("m", "lf", "lr", "heave_f_k", "heave_r_k")):
         raise ValueError("找不到可匯入的全車參數。")
     setup = default_project()
@@ -315,6 +358,7 @@ def open_project(path):
         native = source.get("application") == APP
         setup = source if native else import_linear(source)
         compile_project(setup)
+        setup = with_total_limit_rates(setup)
     except (KeyError, TypeError, AttributeError, OverflowError) as exc:
         raise ValueError(f"專案欄位不完整或格式有誤：{exc}") from exc
     return setup, path if native else None

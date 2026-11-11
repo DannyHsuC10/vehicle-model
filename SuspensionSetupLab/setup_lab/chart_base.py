@@ -18,8 +18,9 @@ SEGMENT_LABELS={"projection_upper":"Upper projection","projection_lower":"Lower 
 
 
 class Chart(ttk.Frame):
-    def __init__(self,master):
+    def __init__(self,master,*,min_width=300):
         super().__init__(master)
+        self.min_width=min_width
         self.canvas=tk.Canvas(self,bg=BG,highlightthickness=0,width=800,height=470)
         self.canvas.pack(fill="both",expand=True)
         self.spec=None; self.primitives=[]; self.view=None; self.drag=None
@@ -57,7 +58,8 @@ class Chart(ttk.Frame):
 
     def draw(self):
         self.canvas.delete("all"); self.primitives=[]
-        width=max(self.canvas.winfo_width(),300); height=max(self.canvas.winfo_height(),220)
+        width=max(self.canvas.winfo_width(),self.min_width); height=max(self.canvas.winfo_height(),220)
+        compact=width<300
         spec=self.spec
         if not spec:
             self.text(width/2,height/2,"設定參數後按「計算」",size=15)
@@ -88,7 +90,8 @@ class Chart(ttk.Frame):
             if name and name not in seen:
                 seen.add(name)
                 legend.append((name,s.get("color",COLORS[index%len(COLORS)]),s.get("dash",())))
-        left,right,bottom=85,width-35,height-67
+        left,right=(62,width-22) if compact else (85,width-35)
+        bottom=height-67
         legend_items=[];xpos=left;legend_y=45
         # Keep geometry's plotting rectangle fixed when display layers change.
         # Otherwise an extra legend row changes the pixel aspect of a saved view.
@@ -114,7 +117,8 @@ class Chart(ttk.Frame):
         if self.view is None:
             xs,ys=zip(*pairs); xmin,xmax=min(xs),max(xs); ymin,ymax=min(ys),max(ys)
             dx=xmax-xmin or max(abs(xmax)*.2,1); dy=ymax-ymin or max(abs(ymax)*.2,1)
-            xmin-=dx*.06; xmax+=dx*.06; ymin-=dy*.12; ymax+=dy*.12
+            xmin,xmax=spec.get("x_range",(xmin-dx*.06,xmax+dx*.06))
+            ymin-=dy*.12; ymax+=dy*.12
             if spec.get("equal") or "segments" in spec:
                 ratio=pw/ph
                 if (xmax-xmin)/(ymax-ymin)<ratio:
@@ -126,12 +130,14 @@ class Chart(ttk.Frame):
         self.bounds=(left,top,right,bottom)
         sx=lambda x:left+(x-xmin)/(xmax-xmin)*pw
         sy=lambda y:bottom-(y-ymin)/(ymax-ymin)*ph
-        for i in range(6):
-            x=left+pw*i/5; y=top+ph*i/5
+        intervals=3 if compact else 5
+        for i in range(intervals+1):
+            fraction=i/intervals
+            x=left+pw*fraction; y=top+ph*fraction
             self.line([x,top,x,bottom],"#253247")
             self.line([left,y,right,y],"#253247")
-            self.text(x,bottom+17,f"{xmin+(xmax-xmin)*i/5:.4g}",size=9)
-            self.text(left-10,y,f"{ymax-(ymax-ymin)*i/5:.4g}",anchor="e",size=9)
+            self.text(x,bottom+17,f"{xmin+(xmax-xmin)*fraction:.4g}",size=9)
+            self.text(left-10,y,f"{ymax-(ymax-ymin)*fraction:.4g}",anchor="e",size=9)
         if ymin<0<ymax: self.line([left,sy(0),right,sy(0)],"#64748b")
         if xmin<0<xmax: self.line([sx(0),top,sx(0),bottom],"#64748b")
         self.text(left,22,spec.get("title",""),"#f8fafc",14,"w")
@@ -146,6 +152,10 @@ class Chart(ttk.Frame):
             for x,y in zip(s["x"],s["y"]):
                 if not self.finite(x) or not self.finite(y): flush(); last=None; continue
                 point=(sx(x),sy(y))
+                if s.get("marker") and left+4 <= point[0] <= right-4 and top+4 <= point[1] <= bottom-4:
+                    px,py=point
+                    self.line([px-4,py,px+4,py],color,2)
+                    self.line([px,py-4,px,py+4],color,2)
                 if last is not None:
                     clipped=self.clip(last,point,left,top,right,bottom)
                     if clipped:
@@ -159,7 +169,8 @@ class Chart(ttk.Frame):
             self.line([xpos,y,xpos+17,y],color,3,dash)
             self.text(xpos+23,y,label,color,9,"w")
         if hidden_legend:self.text(right,22,f"+{hidden_legend} curves (see selection)","#94a3b8",9,"e")
-        self.text(right,bottom+38,"滾輪縮放 · 拖曳平移 / 立體旋轉 · 雙擊重設",color="#64748b",size=8,anchor="e")
+        if not compact:
+            self.text(right,bottom+38,"滾輪縮放 · 拖曳平移 / 立體旋轉 · 雙擊重設",color="#64748b",size=8,anchor="e")
 
     @staticmethod
     def finite(x): return isinstance(x,(float,int)) and math.isfinite(x)
@@ -208,7 +219,7 @@ class Chart(ttk.Frame):
         self.canvas.create_text(r-5,t+14,text=f"x={x:.5g}   y={y:.5g}",fill="#f8fafc",anchor="e",font=("Segoe UI",9),tags="cursor")
 
     def svg(self):
-        width=max(self.canvas.winfo_width(),300); height=max(self.canvas.winfo_height(),220)
+        width=max(self.canvas.winfo_width(),self.min_width); height=max(self.canvas.winfo_height(),220)
         elements=[f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
                   f'<rect width="100%" height="100%" fill="{BG}"/>']
         for item in self.primitives:
@@ -232,7 +243,7 @@ class Chart(ttk.Frame):
         except ImportError as exc:
             raise ValueError("PNG 需要選用套件 Pillow：python -m pip install Pillow。SVG 不需套件。") from exc
         factor=2
-        width=max(self.canvas.winfo_width(),300); height=max(self.canvas.winfo_height(),220)
+        width=max(self.canvas.winfo_width(),self.min_width); height=max(self.canvas.winfo_height(),220)
         image=Image.new("RGB",(width*factor,height*factor),BG); draw=ImageDraw.Draw(image)
         font_path=Path("C:/Windows/Fonts/msjh.ttc")
         for item in self.primitives:

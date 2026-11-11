@@ -91,8 +91,8 @@ def _sizing_tire_stiffness(dynamics):
 
 def _sizing_project(source, target_version):
     version = source.get("schema_version")
-    if type(version) is not int or version not in (1, 2):
-        raise ValueError("Initial Sizing 匯出檔須為 schema_version 1 或 2。")
+    if type(version) is not int or version not in (1, 2, 3):
+        raise ValueError("Initial Sizing 匯出檔須為 schema_version 1、2 或 3。")
     geometry = _sizing_section(source, "geometry")
     if version == 1:
         dynamics = vehicle_data = _sizing_section(_sizing_section(source, "parameters"), "full")

@@ -11,6 +11,10 @@ from .project import CORNERS
 
 STL_DIR = Path(__file__).resolve().parents[1] / "assets" / "LP02"
 BACKGROUND = "#192337"
+DASH_PERIOD_MM = 1800.
+DASH_LENGTH_MM = 950.
+# Slow the visual cue uniformly so individual dashes are readable during playback.
+ROAD_TRAVEL_SCALE = .16
 
 
 def vehicle_motion(result):
@@ -39,6 +43,14 @@ class LP02Scene:
         # Keep each axle's roll constant beyond the wheelbase and blend between the axles.
         self.front_weight = np.clip((self.vertices[:, 0] - self.rear_x) / (self.front_x - self.rear_x), 0., 1.)
 
+        self.road_min, self.road_max = chassis.bounds[0] - 1200., chassis.bounds[1] + 1200.
+        starts = np.arange(self.road_min, self.road_max + DASH_PERIOD_MM, DASH_PERIOD_MM)
+        self.dash_x = np.column_stack((starts, starts + DASH_LENGTH_MM)).ravel()
+        road_points = np.column_stack((np.clip(self.dash_x, self.road_min, self.road_max),
+                                       np.full_like(self.dash_x, self.center_y),
+                                       np.full_like(self.dash_x, self.ground_z)))
+        self.road = pv.line_segments_from_points(road_points)
+
         self.plotter = pv.Plotter(off_screen=True, window_size=size)
         self.aspect = max(1., size[1] / size[0])
         try:
@@ -46,6 +58,8 @@ class LP02Scene:
             self.plotter.add_mesh(chassis, color="#c0cfde", specular=.2, render=False)
             self.wheel_actors = [self.plotter.add_mesh(mesh, color="#394754", specular=.2, render=False)
                                  for mesh in wheels]
+            road_actor = self.plotter.add_mesh(self.road, color="#fbbf24", line_width=3, lighting=False, render=False)
+            road_actor.SetUseBounds(False)
             self.plotter.enable_parallel_projection()
             self.reset_camera()
             self.plotter.show(auto_close=False)
@@ -71,6 +85,11 @@ class LP02Scene:
         for actor, height in zip(self.wheel_actors, wheel_z):
             actor.position = (0., 0., float(height))
 
+    def set_road_distance(self, distance_m):
+        # CAD X points forward, so the ground markings move towards negative X.
+        shift_mm = (distance_m * 1000 * ROAD_TRAVEL_SCALE) % DASH_PERIOD_MM
+        self.road.points[:, 0] = np.clip(self.dash_x - shift_mm, self.road_min, self.road_max)
+
     def reset_camera(self):
         self.plotter.view_isometric(render=False)
         self.plotter.camera.parallel_scale *= self.aspect / 1.4
@@ -94,6 +113,8 @@ class FullVehicleView(ttk.Frame):
         self.reset = ttk.Button(toolbar, text="重設視角", command=self.reset_camera, state="disabled")
         self.reset.pack(side="right")
         ttk.Label(toolbar, text="拖曳旋轉 · 滾輪縮放").pack(side="left")
+        self.speed_label = ttk.Label(toolbar)
+        self.speed_label.pack(side="left", padx=(8, 0))
         self.canvas = tk.Canvas(self, bg=BACKGROUND, width=380, height=380, highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
         self.preview = self.canvas.create_image(0, 0, anchor="nw")
@@ -113,6 +134,8 @@ class FullVehicleView(ttk.Frame):
         self.result, self.index = result, 0
         self.drawn_index = self.error = None
         self.motion = vehicle_motion(result) if result is not None else None
+        self.speed_mps = result.project["case"]["speed"] if result is not None else 0.
+        self.speed_label.configure(text=f"{self.speed_mps * 3.6:g} km/h" if result is not None else "")
         if self.scene is not None and result is not None:
             self.scene.set_reference(result.project["vehicle"])
         if result is None:
@@ -149,6 +172,7 @@ class FullVehicleView(ttk.Frame):
                 self.reset.state(("!disabled",))
             if self.drawn_index != self.index:
                 self.scene.set_pose(*(values[self.index] for values in self.motion))
+                self.scene.set_road_distance(self.speed_mps * self.result.time[self.index])
                 self.drawn_index = self.index
             pixels = self.scene.image(size)
         except ImportError:

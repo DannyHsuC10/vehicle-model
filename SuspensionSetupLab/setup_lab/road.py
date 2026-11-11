@@ -39,7 +39,7 @@ class Road:
             return
 
         self.command = tuple(options[key] if active else 0. for key, active in zip(("ax", "ay"), command_axes))
-        follow_front = options["rear_delay"] and axes[0]
+        follow_front = (self.bump or self.iso) and options["rear_delay"] and axes[0]
         delay = wheelbase / options["speed"] if follow_front else 0.
         selected = TARGET_WHEELS[options["target"]]
         self.onsets = [(index, options["start"] + (delay if corner.startswith("R") else 0.))

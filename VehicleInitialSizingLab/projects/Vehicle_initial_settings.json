@@ -1,7 +1,7 @@
 {
   "application": "VehicleInitialSizingLab-DynamicsExport",
   "schema_version": 2,
-  "name": "車輛初步設計",
+  "name": "vehicle_project2",
   "dynamics": {
     "anti_front": 0.0943798655466936,
     "anti_rear": 0.0943798655466936,
@@ -39,7 +39,7 @@
     "k_frame": 636283.0341215229,
     "m_frame": 67.0,
     "tender_enabled": true,
-    "tender_stiffness_N_per_m": 124195.07143003517,
+    "tender_stiffness_N_per_m": 580149.2116191608,
     "heave_configuration": "main_spring"
   },
   "geometry": {
@@ -70,6 +70,6 @@
     "drive_front": 0.5,
     "brake_front": 0.7530556371361202,
     "gravity": 9.81,
-    "free_radius": 0.2
+    "free_radius": 0.203
   }
 }
