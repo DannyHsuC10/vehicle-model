@@ -30,6 +30,7 @@ SCENARIOS = {"bump": "凸塊／凹坑", **{key: f"ISO 8608 Class {key[-1].upper(
 BUMP_CASES = ("bump", "combined")
 MANEUVER_CASES = ("maneuver", "combined")
 CASE_DEFAULTS = {"seed": 0, "iso_lateral": False}
+DEFAULT_DAMPER_SWITCH_SPEED = .1
 AERO_DEFAULTS = {"enabled": False, "reference_speed_kmh": 100., "reference_force_n": 500.}
 AERO_FIELDS = {"reference_speed_kmh": ("參考車速 (km/h)", .1, 540),
                "reference_force_n": ("參考下壓力 (N)", 0, 1e6)}
@@ -75,6 +76,12 @@ def linear(k, c, ratio=1.0):
             "installed_mm": 0., "main_rate": k / 1000,
             "tender_rate": 25., "tender_travel": 4.3, "jounce_mm": 50., "jounce_rate": 0.,
             "rebound_mm": 50., "rebound_rate": 0., "limit_rate_mode": "total"}
+
+
+def _four_way_channel(k, c, *, spring_kind="single"):
+    return dict(linear(k, c), spring_kind=spring_kind, damper_kind="bilinear",
+                compression=[[0, c], [DEFAULT_DAMPER_SWITCH_SPEED, c]],
+                rebound=[[0, c], [DEFAULT_DAMPER_SWITCH_SPEED, c]])
 
 
 def with_total_limit_rates(project):
@@ -138,10 +145,11 @@ def default_project():
                         h_rc_f=.025, h_rc_r=.025, dive_front=.15, lift_rear=.15, lift_front=.15,
                         squat_rear=.15, body_twist_k=180000., body_twist_c=300.),
         "tires": {c: dict(mu=15., k=80., c=300.) for c in CORNERS},
-        "channels": {"heave_f": dict(linear(35000, 3350), spring_kind="tender"),
-                     "heave_r": dict(linear(31500, 3175), spring_kind="tender"),
-                     "roll_f": linear(20000, 2500), "roll_r": linear(18000, 2400),
-                     **{key: linear(0, 0) for key in ("roll_c", "warp", *CORNERS)}},
+        "channels": {"heave_f": _four_way_channel(35000, 3350, spring_kind="tender"),
+                     "heave_r": _four_way_channel(31500, 3175, spring_kind="tender"),
+                     "roll_f": _four_way_channel(20000, 2500), "roll_r": _four_way_channel(18000, 2400),
+                     "roll_c": _four_way_channel(0, 0),
+                     **{key: linear(0, 0) for key in ("warp", *CORNERS)}},
         "case": dict(scenario="bump", target="FL", duration=2., dt=.002, start=.5, height=15.,
                      period=.12, speed=12., ax=-5., ay=5., ramp=.2, rear_delay=False,
                      recording=[], recording_name="", **CASE_DEFAULTS),

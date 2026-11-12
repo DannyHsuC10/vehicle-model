@@ -13,10 +13,10 @@ from .aero_page import AeroPage
 from .chart_base import Chart
 from .components import DAMPER_DIRECTIONS, DAMPER_STAGE_COUNTS, KCSystem, damper_kinds
 from .engine import Cancelled, simulate
-from .project import (AERO_DEFAULTS, APP, CHANNELS, COMPONENT_FIELDS, CORNERS, DAMPER_FORCE_LABELS, DEFAULT_SOURCES,
-                      MODEL_PAGE, MODEL_SOURCES, PAGE_MODELS, TIRE_FIELDS, VEHICLE_FIELDS, analysis_page_cases,
-                      compile_project, default_project, model_channels, model_corners, open_project, read_force_csv,
-                      save_project, with_total_limit_rates)
+from .project import (AERO_DEFAULTS, APP, CHANNELS, COMPONENT_FIELDS, CORNERS, DAMPER_FORCE_LABELS,
+                      DEFAULT_DAMPER_SWITCH_SPEED, DEFAULT_SOURCES, MODEL_PAGE, MODEL_SOURCES, PAGE_MODELS,
+                      TIRE_FIELDS, VEHICLE_FIELDS, analysis_page_cases, compile_project, default_project,
+                      model_channels, model_corners, open_project, read_force_csv, save_project, with_total_limit_rates)
 from .widgets import entry, key_for
 
 SPRINGS = {"single": "單一彈簧", "tender": "主簧＋Tender", "force": "查表彈簧剛性", "stages": "舊專案彈簧曲線"}
@@ -377,7 +377,7 @@ class SetupApp:
                 low = points[1][1] / points[1][0] if kind == "force" else points[0][1]
                 rows[side] = [[0, low]]
                 if mode == "bilinear":
-                    high = points[1] if kind == "stages" and len(points) > 1 else [0.1, low]
+                    high = points[1] if kind == "stages" and len(points) > 1 else [DEFAULT_DAMPER_SWITCH_SPEED, low]
                     rows[side].append(high)
             if mode == "single":
                 rows["rebound"] = rows["compression"].copy()

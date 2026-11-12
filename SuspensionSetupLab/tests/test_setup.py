@@ -155,7 +155,7 @@ class ModelTests(unittest.TestCase):
         project["case"].update(duration=.8, start=.1, dt=.004)
         a = simulate(project)
         heave = project["channels"]["heave_f"]
-        heave.update(spring_kind="tender", main_rate=55, tender_rate=25, tender_travel=5,
+        heave.update(spring_kind="tender", main_rate=55, tender_rate=25, tender_travel=5, damper_kind="stages",
                      compression=[[0, 1600], [.03, 900], [.12, 500]], rebound=[[0, 3600], [.05, 1800]],
                      jounce_mm=15, jounce_rate=70.)
         b = simulate(project)

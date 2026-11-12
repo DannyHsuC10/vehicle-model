@@ -150,6 +150,9 @@ class DesktopTests(unittest.TestCase):
 
     def test_damper_modes_and_independent_switch_speeds(self):
         root, app = self.make_app(default_project())
+        self.assertEqual(app.damper_kind.get(), DAMPER_MODES["bilinear"])
+        app.damper_kind.set(DAMPER_MODES["single"])
+        app.change_damper_mode()
         app.damper_vars["rate"].set("1000")
         self.assertEqual(app.collect()["channels"]["heave_f"]["rebound"], [[0, 1000]])
 
@@ -160,7 +163,8 @@ class DesktopTests(unittest.TestCase):
 
         app.damper_kind.set(DAMPER_MODES["bilinear"])
         app.change_damper_mode()
-        for key, value in (("compression_switch", .1), ("rebound_switch", .2),
+        for key, value in (("compression", 1000), ("rebound", 1800),
+                           ("compression_switch", .1), ("rebound_switch", .2),
                            ("compression_high", 200), ("rebound_high", 300)):
             app.damper_vars[key].set(str(value))
         root.update_idletasks()
