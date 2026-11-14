@@ -60,6 +60,22 @@ def damper_kinds(kind):
     return kinds
 
 
+def combined_tender_travel(tender_travel, main_rate, tender_rate):
+    return tender_travel * (1 + tender_rate / main_rate) if main_rate > 0 else tender_travel
+
+
+def tender_bind_travel(settings):
+    label = "Tender 靜態後併圈行程"
+    if "tender_after_static_mm" in settings:
+        return number(settings["tender_after_static_mm"], label, 0)
+    if "tender_bind_mm" in settings:
+        return number(settings["tender_bind_mm"], label, 1e-6)
+    travel = number(settings["tender_travel"], "Tender 自身併圈行程", 1e-6)
+    main = number(settings["main_rate"], "主簧剛性", 0)
+    tender = number(settings["tender_rate"], "Tender 剛性", 0)
+    return number(combined_tender_travel(travel, main, tender), label, 1e-6)
+
+
 class Curve:
     """Piecewise linear lookup, or a continuous integral of piecewise slopes."""
 
@@ -101,12 +117,13 @@ class Curve:
 class KCSystem:
     """Positive travel and velocity indicate compression, positive reaction resists it."""
 
-    def __init__(self, settings):
+    def __init__(self, settings, *, damping_mass=None):
         self.enabled = settings["enabled"]
         if type(self.enabled) is not bool:
             raise ValueError("元件啟用欄位必須是布林值。")
         self.offset = number(settings["installed_mm"], "安裝預壓行程")
-        self.jounce = number(settings["jounce_mm"], "壓縮限位行程", 0)
+        self.jounce_travel = number(settings["jounce_mm"], "靜態後壓縮限位行程", 0)
+        self.jounce = self.jounce_travel
         self.rebound = number(settings["rebound_mm"], "伸長限位行程", 0)
         self.jounce_rate = number(settings["jounce_rate"], "壓縮限位剛性", 0)
         self.rebound_rate = number(settings["rebound_rate"], "伸長限位剛性", 0)
@@ -115,6 +132,8 @@ class KCSystem:
             raise ValueError("無法辨識限位剛性類型。")
         self.total_limit_rate = limit_mode == "total"
         self.spring_kind = settings["spring_kind"]
+        self.static_stroke = self.tender_bind_stroke = None
+        self.spring_force_offset = 0.
         if self.spring_kind not in ("single", "stages", "tender", "force"):
             raise ValueError("無法辨識彈簧曲線類型。")
         if self.spring_kind in ("single", "tender"):
@@ -122,43 +141,85 @@ class KCSystem:
             table = [(0., main)]
             if self.spring_kind == "tender":
                 tender = number(settings["tender_rate"], "Tender 剛性", 1e-6)
-                travel = number(settings["tender_travel"], "Tender 併圈前行程", 1e-6)
                 rate = main * (tender / (main + tender))
-                bind = travel * (1 + tender / main)
-                table = [(0., rate), (bind, main)]
+                self.tender_after_static = tender_bind_travel(settings)
+                self.tender_main_rate = main
+                self.tender_rate_increase = main - rate
+                table = [(0., rate)]
             self.spring_curve = Curve(table, stages=True)
         else:
             stages = self.spring_kind == "stages"
             table = spring_points(settings["spring"], stages=stages)
             self.spring_curve = Curve(table, stages=stages, extrapolate=not stages)
         self.spring = self.spring_curve.integrated if self.spring_curve.stages else self.spring_curve.lookup
-        if self.total_limit_rate:
-            self.jounce_force = self.spring_force(self.jounce)
-            self.rebound_force = self.spring_force(-self.rebound)
+        self.update_limit_forces()
+
+        self.motion_ratio = Curve(points(settings["mr"], "運動比曲線", minimum_y=1e-6))
+        self.critical_damping = None
+        if damping_mass is not None:
+            stiffness = self.spring_slope(0., from_right=True) * 1000
+            ratio = self.motion_ratio.lookup(0.)
+            self.critical_damping = number(2 * math.sqrt(stiffness) * math.sqrt(damping_mass) / ratio, "臨界阻尼", 0)
 
         damper_kind = settings["damper_kind"]
         kinds = damper_kinds(damper_kind)
         stage_count = DAMPER_STAGE_COUNTS.get(damper_kind) if isinstance(damper_kind, str) else None
+        use_ratio = settings.get("damper_ratio", False)
+        if type(use_ratio) is not bool:
+            raise ValueError("使用阻尼比欄位必須是布林值。")
+        if use_ratio and (stage_count is None or self.critical_damping is None):
+            raise ValueError("阻尼比需要一段式、兩段式或四段式阻尼及車輛參數。")
         self.dampers = []
         for key, label in (("compression", "壓縮阻尼"), ("rebound", "回彈阻尼")):
             stages = kinds[key] == "stages"
             table = damper_points(settings[key], label, stages=stages)
             if stage_count is not None and len(table) != stage_count:
                 raise ValueError(f"{label}需要 {stage_count} 段係數。")
+            if use_ratio:
+                table = [(speed, number(value * self.critical_damping, label + "係數", 0)) for speed, value in table]
             curve = Curve(table, stages=stages)
             self.dampers.append(curve.integrated if stages else curve.lookup)
         if damper_kind == "single" and settings["compression"][0][1] != settings["rebound"][0][1]:
             raise ValueError("一段式阻尼的壓縮與回彈須使用同一個係數。")
-        self.motion_ratio = Curve(points(settings["mr"], "運動比曲線", minimum_y=1e-6))
 
     def spring_force(self, stroke_mm):
-        return self.spring(stroke_mm + self.offset)
+        force = self.spring(stroke_mm + self.offset) + self.spring_force_offset
+        if self.tender_bind_stroke is not None:
+            force += self.tender_rate_increase * max(0., stroke_mm - self.tender_bind_stroke)
+        return force
+
+    def update_limit_forces(self):
+        if self.total_limit_rate:
+            if self.jounce is not None:
+                self.jounce_force = self.spring_force(self.jounce)
+            self.rebound_force = self.spring_force(-self.rebound)
+
+    def set_static_reference(self, static_stroke):
+        """Set the compression thresholds, or clear them while finding the trim."""
+        self.static_stroke = static_stroke
+        self.jounce = None if static_stroke is None else static_stroke + self.jounce_travel
+        self.tender_bind_stroke = None
+        self.spring_force_offset = 0.
+        self.update_limit_forces()
+        if static_stroke is None or self.spring_kind != "tender":
+            return
+        trim_force = self.spring_force(static_stroke) + self.stop_force(static_stroke)
+        self.tender_bind_stroke = static_stroke + self.tender_after_static
+        self.update_limit_forces()
+        # Keep the trim force if the rebound stop is already engaged at trim.
+        self.spring_force_offset = trim_force - (self.spring_force(static_stroke) + self.stop_force(static_stroke))
+        self.update_limit_forces()
 
     def spring_breakpoints(self):
         """Return the spring curve's points in installed shaft coordinates."""
+        if self.tender_bind_stroke is not None:
+            return (self.tender_bind_stroke,)
         return tuple(x - self.offset for x in self.spring_curve.x)
 
     def spring_slope(self, stroke_mm, *, from_right):
+        bind = self.tender_bind_stroke
+        if bind is not None and (stroke_mm > bind or (from_right and stroke_mm == bind)):
+            return self.tender_main_rate
         curve = self.spring_curve
         bisect = bisect_right if from_right else bisect_left
         index = bisect(curve.x, stroke_mm + self.offset) - 1
@@ -169,16 +230,17 @@ class KCSystem:
         return self.dampers[0](speed) if speed >= 0 else -self.dampers[1](-speed)
 
     def stop_force(self, stroke_mm):
+        in_jounce = self.jounce is not None and self.jounce_rate and stroke_mm > self.jounce
         if self.total_limit_rate:
-            if self.jounce_rate and stroke_mm > self.jounce:
+            if in_jounce:
                 limited = self.jounce_force + self.jounce_rate * (stroke_mm - self.jounce)
             elif self.rebound_rate and stroke_mm < -self.rebound:
                 limited = self.rebound_force + self.rebound_rate * (stroke_mm + self.rebound)
             else:
                 return 0.0
             return limited - self.spring_force(stroke_mm)
-        return (self.jounce_rate * max(0.0, stroke_mm - self.jounce)
-                - self.rebound_rate * max(0.0, -stroke_mm - self.rebound))
+        compression = self.jounce_rate * (stroke_mm - self.jounce) if in_jounce else 0.
+        return compression - self.rebound_rate * max(0.0, -stroke_mm - self.rebound)
 
     def force(self, travel, velocity, details=False):
         if not self.enabled:

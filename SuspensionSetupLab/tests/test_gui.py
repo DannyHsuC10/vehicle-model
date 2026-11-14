@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from setup_lab.engine import simulate
+from setup_lab.engine import prepare_vehicle, simulate
 from setup_lab.gui import DAMPER_MODES, MR_MODES, SPRINGS, SetupApp
 from setup_lab.project import MODELS, SCENARIOS, compile_project, default_project, open_project, save_project
 from setup_lab.vehicle_3d import FullVehicleView
@@ -52,6 +52,61 @@ class DesktopTests(unittest.TestCase):
         app.set_project(project, None)
         self.assertEqual(app.aero_page.settings(), project["aero"])
 
+    def test_load_transfer_pages_draw_and_restore_their_settings(self):
+        p = default_project()
+        p["load_transfer"] = {"rigid": {"ax": -1.}, "distribution": {"radius": 30.}}
+        root, app = self.make_app(p)
+        for kind, (key, value) in (("rigid", ("ax", -1.)), ("distribution", ("radius", 30.))):
+            page = app.transfer_pages[kind]
+            app.pages.select(page)
+            root.update()
+            app.run()
+            self.assertEqual(len(page.wheels.get_children()), 4)
+            self.assertEqual(page.options()[key], value)
+            self.assertEqual(len(page.charts["輪荷"].spec["series"]), 4)
+        self.assertEqual(len(app.transfer_pages["distribution"].paths.get_children()), 3)
+        self.assertEqual(len(app.transfer_pages["distribution"].charts["三路徑力矩"].spec["series"]), 6)
+        self.assertIsNotNone(app.transfer_pages["rigid"].charts["接地面"].spec)
+        app.transfer_pages["rigid"].fields["ay"].set("1.25")
+        snapshot = app.collect(include_pages=True)
+        self.assertEqual(snapshot["load_transfer"]["rigid"]["ay"], 1.25)
+        app.set_project(snapshot, None)
+        self.assertEqual(app.transfer_pages["rigid"].options()["ay"], 1.25)
+
+    def test_geometry_csv_import_is_saved_and_used_by_simulation(self):
+        p = default_project()
+        p["case"].update(scenario="maneuver", target="all", duration=.4, start=.05, ramp=.1)
+        root, app = self.make_app(p)
+        page = app.geometry_page
+        app.pages.select(page)
+        root.update()
+        base = Path(__file__).resolve().parents[1] / ".test-tmp"
+        base.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=base) as folder:
+            path = Path(folder) / "curve.csv"
+            with patch("setup_lab.geometry_page.filedialog.askopenfilename", return_value=str(path)), patch.object(app, "error") as error:
+                path.write_text("travel_mm,front_rc_mm,rear_rc_mm\n-50,5,10\n0,25,30\n50,65,75\n", encoding="utf-8")
+                page.import_table("roll_center")
+                path.write_text("travel_mm,front_anti_dive_pct,rear_anti_lift_pct,front_anti_lift_pct,rear_anti_squat_pct\n"
+                                "-50,0,0,0,0\n0,15,20,25,30\n50,40,45,50,55\n", encoding="utf-8")
+                page.import_table("anti")
+                error.assert_not_called()
+                before = app.collect()
+                path.write_text("travel_mm,front_rc_mm,rear_rc_mm\n0,25,30\n0,65,75\n", encoding="utf-8")
+                page.import_table("roll_center")
+                error.assert_called_once()
+                self.assertEqual(app.collect(), before)
+            save_project(path, before)
+            loaded, _ = open_project(path)
+            app.set_project(loaded, None)
+            self.assertEqual(page.tables, before["geometry_tables"])
+            result = simulate(app.collect())
+            for group in ("Roll Center", "Anti"):
+                for name in result.groups[group]:
+                    self.assertGreater(np.ptp(result.signals[name]), .01)
+            page.reset_table("anti")
+            self.assertNotIn("anti", app.collect()["geometry_tables"])
+
     def test_csv_force_lookup_import_updates_only_validated_channel_tables(self):
         root, app = self.make_app(default_project())
         app.pages.select(app.pages.tabs()[-1])
@@ -83,7 +138,7 @@ class DesktopTests(unittest.TestCase):
                 app.change_mr_mode()
                 self.assertTrue(app.curve_import_buttons["mr"].grid_info())
                 self.assertFalse(app.mr_fixed_form.grid_info())
-                for key in ("main_rate", "tender_rate", "tender_travel"):
+                for key in ("main_rate", "tender_rate", "tender_after_static_mm"):
                     self.assertTrue(all(not widget.grid_info() for widget in app.component_inputs[key]))
                 self.assertTrue(all(widget.grid_info() for widget in app.component_inputs["jounce_mm"]))
                 self.assertFalse(any(form.grid_info() for form in app.damper_forms.values()))
@@ -92,9 +147,13 @@ class DesktopTests(unittest.TestCase):
                 error.assert_not_called()
                 root.update_idletasks()
                 spring = app.spring_chart.spec["series"][0]
-                spring_forces = dict(zip(spring["x"], spring["y"]))
+                vehicle, road = prepare_vehicle(app.collect())
+                vehicle.equilibrium(road.at(0.), include_aero=False)
+                rear_heave = next(component for i, component in vehicle.active if i == 1)
                 self.assertEqual(app.spring_chart.spec["ylabel"], "力 (N)")
-                self.assertEqual([spring_forces[x] for x in (-7., -2., 0., 8.)], [-150., 0., 80., 400.])
+                self.assertEqual(app.spring_chart.spec["xlabel"], "相對無空力靜態行程 (mm)")
+                np.testing.assert_allclose(np.interp(np.array([-7., -2., 0., 8.]) - rear_heave.static_stroke,
+                                                     spring["x"], spring["y"]), [-150., 0., 80., 400.], atol=1e-10)
                 self.assertEqual(app.damper_chart.spec["series"][0]["y"], [-340., -340., -90., 0., 70., 240., 240.])
                 mr = app.mr_chart.spec["series"][0]
                 np.testing.assert_allclose(np.interp([-10., 7.5, 20.], mr["x"], mr["y"]), [.9, 1., 1.1])
@@ -177,6 +236,47 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(app.damper_kind.get(), DAMPER_MODES["bilinear"])
         self.assertEqual(float(app.damper_vars["rebound_switch"].get()), .2)
 
+    def test_damper_ratio_checkbox_converts_and_persists_each_channel(self):
+        root, app = self.make_app(default_project())
+        root.update_idletasks()
+        before = app.damper_chart.spec["series"][0]
+        app.damper_ratio_check.invoke()
+        root.update_idletasks()
+        self.assertIn("阻尼比", app.damper_labels["bilinear", "compression"].cget("text"))
+        self.assertEqual(float(app.damper_vars["compression_switch"].get()), .1)
+        np.testing.assert_allclose(app.damper_chart.spec["series"][0]["y"], before["y"])
+
+        app.damper_vars["compression"].set(".4")
+        app.damper_vars["compression_high"].set(".2")
+        app.channel_list.selection_set("roll_f")
+        app.select_channel()
+        self.assertFalse(app.damper_ratio.get())
+        project = app.collect()
+        base = Path(__file__).resolve().parents[1] / ".test-tmp"
+        base.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=base) as directory:
+            path = Path(directory) / "ratio.json"
+            save_project(path, project)
+            saved, _ = open_project(path)
+        app.set_project(saved, None)
+        self.assertTrue(app.damper_ratio.get())
+        self.assertEqual(float(app.damper_vars["compression"].get()), .4)
+        self.assertEqual(float(app.damper_vars["compression_high"].get()), .2)
+
+        app.damper_kind.set(DAMPER_MODES["force"])
+        app.change_damper_mode()
+        self.assertFalse(app.damper_ratio.get())
+        self.assertFalse(app.damper_ratio_check.winfo_manager())
+        app.damper_kind.set(DAMPER_MODES["bilinear"])
+        app.change_damper_mode()
+        self.assertTrue(app.damper_ratio.get())
+        app.damper_ratio_check.invoke()
+        converted = app.collect()
+        self.assertNotIn("damper_ratio", converted["channels"]["heave_f"])
+        ratio_damper, coefficient_damper = compile_project(saved)[0], compile_project(converted)[0]
+        for velocity in (-.4, -.05, .05, .4):
+            self.assertAlmostEqual(ratio_damper.damper_force(velocity), coefficient_damper.damper_force(velocity))
+
     def test_elastic_chart_includes_both_travel_stops(self):
         p = default_project()
         p["channels"]["heave_f"]["spring_kind"] = "single"
@@ -185,12 +285,17 @@ class DesktopTests(unittest.TestCase):
             app.component_vars[name].set(str(value))
         root.update_idletasks()
         series = app.spring_chart.spec["series"][0]
-        self.assertIn(-15., series["x"])
-        self.assertIn(10., series["x"])
-        np.testing.assert_allclose(app.spring_chart.view[:2], [-16.5, 11.])
-        np.testing.assert_allclose([series["x"][0], series["x"][-1]], [-16.5, 11.])
-        np.testing.assert_allclose(np.interp([-16.5, -15., 10., 11.], series["x"], series["y"]),
-                                   [-600., -525., 350., 430.])
+        vehicle, road = prepare_vehicle(app.collect())
+        trim = vehicle.equilibrium(road.at(0.), include_aero=False)
+        static = float(vehicle.channel_travel[0] @ trim) * 1000
+        rebound = -15. - static
+        jounce_force = 35. * (static + 10.)
+        points = [rebound * 1.1, rebound, 0., 10., 11.]
+        np.testing.assert_allclose(app.spring_chart.view[:2], [points[0], points[-1]])
+        for point in points:
+            self.assertTrue(np.isclose(series["x"], point).any())
+        np.testing.assert_allclose(np.interp(points, series["x"], series["y"]),
+                                   [-525. + .1 * rebound * 50., -525., 35. * static, jounce_force, jounce_force + 80.])
 
     def test_draft_background_run_and_saved_baseline(self):
         p = default_project()
@@ -216,6 +321,8 @@ class DesktopTests(unittest.TestCase):
         app.run()
         self.finish_job(root, app, full)
         self.assertIs(full.comparison(), baseline)
+        full.group.set("輪荷")
+        full.select_group()
         self.assertEqual(len(full.chart.spec["series"]), 8)
 
         app.pages.select(quarter)
@@ -223,13 +330,29 @@ class DesktopTests(unittest.TestCase):
         quarter.source_widget.current(3)
         quarter.case_mode()
         self.assertEqual(app.channel_list.set("heave_r", "state"), "啟用")
-        self.assertEqual(app.channel_list.set("roll_r", "state"), "不參與")
+        self.assertEqual(app.channel_list.set("roll_r", "state"), "啟用")
+        self.assertEqual(app.channel_list.set("roll_f", "state"), "不參與")
+        self.assertNotIn("quarter_mr", quarter.case_vars)
+        quarter.case["quarter_mr"] = .8
         self.assertNotIn(SCENARIOS["maneuver"], quarter.scenario_widget["values"])
+        app.channel_list.selection_set("heave_r")
+        app.select_channel()
+        app.component_vars["jounce_mm"].set("7")
+        app.component_vars["jounce_rate"].set("100")
+        app.component_vars["rebound_rate"].set("80")
         compile_project(app.collect())
         app.run()
         app.pages.select(left_right)
         self.finish_job(root, app, quarter)
         self.assertEqual(quarter.result.corners, ("RR",))
+        self.assertNotIn("quarter_mr", quarter.result.project["case"])
+        self.assertIn("後軸側傾", quarter.result.groups)
+        quarter.group.set("輪端行程")
+        quarter.select_group()
+        for label in ("後軸升沉壓縮限位", "後軸升沉伸長限位"):
+            limit = next(line for line in quarter.chart.spec["series"] if line.get("name", "").startswith(label))
+            self.assertTrue(limit["dash"])
+            self.assertEqual(limit["y"][0], limit["y"][1])
         self.assertEqual(len(quarter.metrics.get_children()), 1)
         self.assertIsNone(left_right.result)
         self.assertIsNone(quarter.comparison())
@@ -257,6 +380,26 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(app.collect()["case"]["target"], "FR")
         self.assertEqual(app.collect()["model_sources"]["half_fr"], "right")
 
+    def test_full_car_attitude_overlays_pitch_and_roll(self):
+        p = default_project()
+        p["case"].update(duration=.4, start=.05, target="FL")
+        root, app = self.make_app(p)
+        page = app.analysis_pages["full"]
+        for model, angles in (("rigid", ("俯仰", "側傾")), ("flex", ("俯仰", "前側傾", "後側傾"))):
+            with self.subTest(model=model):
+                p["model"] = model
+                result = simulate(p)
+                page.set_result(result)
+                self.assertEqual(page.group.get(), "車身姿態")
+                self.assertEqual(page.signal.get(), "全部")
+                self.assertEqual(page.chart.spec["ylabel"], "deg")
+                series = page.chart.spec["series"]
+                self.assertEqual(tuple(line["name"] for line in series), angles)
+                for line in series:
+                    np.testing.assert_allclose(line["x"], result.time)
+                    np.testing.assert_allclose(line["y"], result.signals[f"{line['name']} [deg]"])
+                    self.assertGreater(np.max(np.abs(line["y"])), 0.)
+
     def test_playback_and_project_round_trip_across_analysis_pages(self):
         p = default_project()
         p["case"].update(duration=.4, start=.05, dt=.005)
@@ -275,10 +418,22 @@ class DesktopTests(unittest.TestCase):
             root.update()
             page.model.set(MODELS[model])
             page.case_mode()
+            if family in ("half_lr", "half_fr"):
+                page.target.set("FL")
             page.case_vars["duration"].set(.4)
             page.case_vars["start"].set(.05)
             app.run()
             self.finish_job(root, app, page)
+            if family in ("half_lr", "half_fr"):
+                angle = "側傾" if family == "half_lr" else "俯仰"
+                self.assertEqual(page.group.get(), "車身姿態")
+                page.signal.set(f"{angle} [deg]")
+                page.draw_result()
+                self.assertEqual(page.chart.spec["ylabel"], "deg")
+                series, = page.chart.spec["series"]
+                self.assertEqual(series["name"], angle)
+                np.testing.assert_allclose(series["y"], page.result.signals[f"{angle} [deg]"])
+                self.assertGreater(np.max(np.abs(series["y"])), 0.)
             if projection is None:
                 self.assertIsInstance(page.motion, FullVehicleView)
             else:

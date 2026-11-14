@@ -5,7 +5,9 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
-from .components import KCSystem, MAX_CURVE_POINTS, damper_points, number, points, spring_points
+from .components import (KCSystem, MAX_CURVE_POINTS, combined_tender_travel, damper_points, number, points,
+                         spring_points, tender_bind_travel)
+from .geometry_lookup import validate_tables
 from .road_profiles import ISO_FREQUENCY_BAND, ISO_ROUGHNESS
 
 
@@ -15,6 +17,7 @@ CHANNELS = {
     "heave_f": "前軸升沉", "heave_r": "後軸升沉", "roll_f": "前軸側傾", "roll_r": "後軸側傾",
     "roll_c": "前後同向側傾", "warp": "對角扭擺", **{c: f"{c} 直推" for c in CORNERS},
 }
+QUARTER_MODAL_CHANNELS = ("heave_f", "heave_r", "roll_f", "roll_r")
 MODELS = {"rigid": "全車 7 DOF｜剛性車架", "flex": "全車 8 DOF｜可扭轉車架",
           "quarter": "1/4 車｜2 DOF", "half_lr": "1/2 左右｜4 DOF", "half_fr": "1/2 前後｜4 DOF"}
 PAGE_MODELS = {"full": ("flex", "rigid"), "half_lr": ("half_lr",), "half_fr": ("half_fr",), "quarter": ("quarter",)}
@@ -31,9 +34,25 @@ BUMP_CASES = ("bump", "combined")
 MANEUVER_CASES = ("maneuver", "combined")
 CASE_DEFAULTS = {"seed": 0, "iso_lateral": False}
 DEFAULT_DAMPER_SWITCH_SPEED = .1
+DEFAULT_TENDER_COMPRESSION_MM = 4.3
 AERO_DEFAULTS = {"enabled": False, "reference_speed_kmh": 100., "reference_force_n": 500.}
 AERO_FIELDS = {"reference_speed_kmh": ("參考車速 (km/h)", .1, 540),
                "reference_force_n": ("參考下壓力 (N)", 0, 1e6)}
+TRANSFER_FIELDS = {
+    "rigid": {
+        "ax": ("縱向加速度 (g)", 0., -3, 3), "ay": ("側向加速度 (g)", 1., -3, 3),
+        "pressure_f": ("前胎壓 (kPa)", 80., 1, 1000), "pressure_r": ("後胎壓 (kPa)", 80., 1, 1000),
+        "width_f": ("前胎寬 (mm)", 180., 1, 1000), "width_r": ("後胎寬 (mm)", 180., 1, 1000),
+    },
+    "distribution": {
+        "ay": ("側向加速度 (g)", 1., -3, 3), "radius": ("彎道半徑 (m)", 20., 2, 5000),
+        "height_f": ("前簧下重心高 (mm)", 230., 0, 2000), "height_r": ("後簧下重心高 (mm)", 230., 0, 2000),
+        "mu": ("輪胎側向摩擦係數", 1.5, .01, 10), "sensitivity": ("輪胎載重敏感係數", .15, 0, 2),
+        "reference_load": ("輪胎參考荷重 (N)", 1000., 1, 1e6),
+        "b": ("Magic Formula B", 8., .01, 100), "c": ("Magic Formula C", 1.3, .01, 10),
+        "e": ("Magic Formula E", -1., -10, 10),
+    },
+}
 TARGET_WHEELS = {**{c: (c,) for c in CORNERS}, "front": CORNERS[:2], "rear": CORNERS[2:],
                  "left": CORNERS[::2], "right": CORNERS[1::2], "all": CORNERS}
 ROAD_HEADER = ("time_s", "z_fl_mm", "z_fr_mm", "z_rl_mm", "z_rr_mm", "ax_mps2", "ay_mps2")
@@ -64,17 +83,19 @@ CASE_FIELDS = {
 }
 COMPONENT_FIELDS = {
     "installed_mm": "安裝預壓行程 (mm)", "main_rate": "彈簧／主簧剛性 (N/mm)",
-    "tender_rate": "Tender 剛性 (N/mm)", "tender_travel": "Tender 併圈前行程 (mm)",
-    "jounce_mm": "壓縮限位起點 (mm)", "jounce_rate": "壓縮限位後總剛性 (N/mm)",
+    "tender_rate": "Tender 剛性 (N/mm)", "tender_after_static_mm": "Tender 靜態後併圈行程 (mm)",
+    "jounce_mm": "靜態後壓縮限位起點 (mm)", "jounce_rate": "壓縮限位後總剛性 (N/mm)",
     "rebound_mm": "伸長限位起點 (mm)", "rebound_rate": "伸長限位後總剛性 (N/mm)",
 }
 
 
 def linear(k, c, ratio=1.0):
-    return {"enabled": bool(k or c), "spring_kind": "single", "spring": [[0, k / 1000]],
+    main_rate, tender_rate = k / 1000, 25.
+    return {"enabled": bool(k or c), "spring_kind": "single", "spring": [[0, main_rate]],
             "damper_kind": "stages", "compression": [[0, c]], "rebound": [[0, c]], "mr": [[0, ratio]],
-            "installed_mm": 0., "main_rate": k / 1000,
-            "tender_rate": 25., "tender_travel": 4.3, "jounce_mm": 50., "jounce_rate": 0.,
+            "installed_mm": 0., "main_rate": main_rate, "tender_rate": tender_rate,
+            "tender_after_static_mm": combined_tender_travel(DEFAULT_TENDER_COMPRESSION_MM, main_rate, tender_rate),
+            "jounce_mm": 50., "jounce_rate": 0.,
             "rebound_mm": 50., "rebound_rate": 0., "limit_rate_mode": "total"}
 
 
@@ -82,6 +103,31 @@ def _four_way_channel(k, c, *, spring_kind="single"):
     return dict(linear(k, c), spring_kind=spring_kind, damper_kind="bilinear",
                 compression=[[0, c], [DEFAULT_DAMPER_SWITCH_SPEED, c]],
                 rebound=[[0, c], [DEFAULT_DAMPER_SWITCH_SPEED, c]])
+
+
+def damping_reference_mass(channel, vehicle, unsprung_mass):
+    """Fixed-wheel sprung mass referred to the channel travel before motion ratio."""
+    sprung = number(vehicle["m"] - unsprung_mass, "簧上質量")
+    if sprung <= 0:
+        raise ValueError("總質量必須大於四輪簧下質量總和。")
+    lf, lr = (number(vehicle[key], VEHICLE_FIELDS[key][0], .01) for key in ("lf", "lr"))
+    front = lr / (lf + lr)
+    rear = 1 - front
+    inertia, tf, tr = (number(vehicle[key], VEHICLE_FIELDS[key][0], .01) for key in ("Ixx", "tf", "tr"))
+    # Heave channel travel is twice axle travel. Roll channel travel is track × angle.
+    roll_f = inertia * front / tf**2
+    roll_r = inertia * rear / tr**2
+    # The combined channels add or subtract two independent axle roll travels.
+    combined = 1 / (1 / roll_f + 1 / roll_r)
+    return {"heave_f": sprung * front / 4, "heave_r": sprung * rear / 4,
+            "roll_f": roll_f, "roll_r": roll_r, "roll_c": combined, "warp": combined,
+            "FL": sprung * front / 2, "FR": sprung * front / 2,
+            "RL": sprung * rear / 2, "RR": sprung * rear / 2}[channel]
+
+
+def compile_component(channel, settings, vehicle, unsprung_mass):
+    mass = damping_reference_mass(channel, vehicle, unsprung_mass) if settings.get("damper_ratio") is True else None
+    return KCSystem(settings, damping_mass=mass)
 
 
 def with_total_limit_rates(project):
@@ -93,11 +139,34 @@ def with_total_limit_rates(project):
             continue
         converted = {**settings, "limit_rate_mode": "total"}
         if settings["jounce_rate"] or settings["rebound_rate"]:
-            component = KCSystem(settings)
+            component = compile_component(key, settings, project["vehicle"],
+                                          sum(project["tires"][corner]["mu"] for corner in CORNERS))
+            if component.spring_kind == "tender" and "tender_after_static_mm" not in settings:
+                component.set_static_reference(-component.offset)
             if component.jounce_rate:
-                converted["jounce_rate"] += component.spring_slope(component.jounce, from_right=True)
+                converted["jounce_rate"] += component.spring_slope(component.jounce_travel, from_right=True)
             if component.rebound_rate:
                 converted["rebound_rate"] += component.spring_slope(-component.rebound, from_right=False)
+        channels[key] = converted
+    return {**project, "channels": channels}
+
+
+def with_static_tender_travel(project):
+    """Carry over old travel values as additional compression after trim."""
+    channels = {}
+    for key, settings in project["channels"].items():
+        if "tender_after_static_mm" in settings:
+            channels[key] = settings
+            continue
+        try:
+            bind = tender_bind_travel(settings)
+        except (KeyError, ValueError):
+            if settings["spring_kind"] == "tender":
+                raise
+            bind = DEFAULT_TENDER_COMPRESSION_MM
+        converted = {**settings, "tender_after_static_mm": bind}
+        converted.pop("tender_travel", None)
+        converted.pop("tender_bind_mm", None)
         channels[key] = converted
     return {**project, "channels": channels}
 
@@ -113,7 +182,7 @@ def model_channels(model, corners):
         return tuple(CHANNELS)
     axles = tuple(dict.fromkeys(corner[0].lower() for corner in corners))
     heave = tuple(f"heave_{axle}" for axle in axles)
-    roll = tuple(f"roll_{axle}" for axle in axles) if model == "half_lr" else ()
+    roll = tuple(f"roll_{axle}" for axle in axles) if model in ("quarter", "half_lr") else ()
     return (*heave, *roll, *corners)
 
 
@@ -238,6 +307,13 @@ def downforce(settings, speed_kmh):
     return settings["reference_force_n"] * (speed_kmh / settings["reference_speed_kmh"]) ** 2
 
 
+def transfer_options(kind, values):
+    if not isinstance(values, dict):
+        raise ValueError("載重轉移設定格式有誤。")
+    return {key: number(values.get(key, default), label, low, high)
+            for key, (label, default, low, high) in TRANSFER_FIELDS[kind].items()}
+
+
 def compile_project(project):
     if project.get("application") != APP or project.get("schema_version") != 1:
         raise ValueError("無法辨識調校專案的格式。")
@@ -258,10 +334,17 @@ def compile_project(project):
     for corner in CORNERS:
         for key, (label, low, high) in TIRE_FIELDS.items():
             number(project["tires"][corner][key], f"{corner} {label}", low, high)
-    if vehicle["m"] <= sum(project["tires"][c]["mu"] for c in CORNERS):
+    unsprung_mass = sum(project["tires"][c]["mu"] for c in CORNERS)
+    if vehicle["m"] <= unsprung_mass:
         raise ValueError("總質量必須大於四輪簧下質量總和。")
 
     validate_aero(project.get("aero", AERO_DEFAULTS))
+    validate_tables(project.get("geometry_tables", {}))
+    transfer = project.get("load_transfer", {})
+    if not isinstance(transfer, dict) or transfer.keys() - TRANSFER_FIELDS.keys():
+        raise ValueError("載重轉移設定格式有誤。")
+    for kind, values in transfer.items():
+        transfer_options(kind, values)
     validate_case(model, sources, project["case"])
     for page, setup in analysis_page_cases(project).items():
         if page not in PAGE_MODELS or not isinstance(setup, dict) or setup.get("model") not in PAGE_MODELS[page]:
@@ -271,7 +354,7 @@ def compile_project(project):
     compiled = []
     for key, label in CHANNELS.items():
         try:
-            compiled.append(KCSystem(project["channels"][key]))
+            compiled.append(compile_component(key, project["channels"][key], vehicle, unsprung_mass))
         except (ValueError, KeyError, TypeError) as exc:
             raise ValueError(f"{label}：{exc}") from exc
     return compiled
@@ -366,7 +449,7 @@ def open_project(path):
         native = source.get("application") == APP
         setup = source if native else import_linear(source)
         compile_project(setup)
-        setup = with_total_limit_rates(setup)
+        setup = with_static_tender_travel(with_total_limit_rates(setup))
     except (KeyError, TypeError, AttributeError, OverflowError) as exc:
         raise ValueError(f"專案欄位不完整或格式有誤：{exc}") from exc
     return setup, path if native else None
@@ -374,6 +457,7 @@ def open_project(path):
 
 def save_project(path, project):
     compile_project(project)
+    project = with_static_tender_travel(project)
     path = Path(path)
     temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
     created = False

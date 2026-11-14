@@ -1,5 +1,6 @@
 """Offline desktop workspace for vehicle setup, replay and matched A/B runs."""
 
+from copy import deepcopy
 from pathlib import Path
 from queue import Empty, Queue
 import threading
@@ -12,11 +13,14 @@ from .analysis_page import AnalysisPage
 from .aero_page import AeroPage
 from .chart_base import Chart
 from .components import DAMPER_DIRECTIONS, DAMPER_STAGE_COUNTS, KCSystem, damper_kinds
-from .engine import Cancelled, simulate
+from .engine import Cancelled, prepare_vehicle, simulate
+from .geometry_page import GeometryPage
+from .load_transfer_page import LoadTransferPage, TITLES as TRANSFER_TITLES
 from .project import (AERO_DEFAULTS, APP, CHANNELS, COMPONENT_FIELDS, CORNERS, DAMPER_FORCE_LABELS,
                       DEFAULT_DAMPER_SWITCH_SPEED, DEFAULT_SOURCES, MODEL_PAGE, MODEL_SOURCES, PAGE_MODELS,
-                      TIRE_FIELDS, VEHICLE_FIELDS, analysis_page_cases, compile_project, default_project,
-                      model_channels, model_corners, open_project, read_force_csv, save_project, with_total_limit_rates)
+                      TIRE_FIELDS, VEHICLE_FIELDS, analysis_page_cases, compile_project, damping_reference_mass,
+                      default_project, model_channels, model_corners, open_project, read_force_csv, save_project, transfer_options,
+                      with_static_tender_travel, with_total_limit_rates)
 from .widgets import entry, key_for
 
 SPRINGS = {"single": "單一彈簧", "tender": "主簧＋Tender", "force": "查表彈簧剛性", "stages": "舊專案彈簧曲線"}
@@ -24,12 +28,11 @@ DAMPER_MODES = {"single": "一段式阻尼（1 段）", "split": "壓縮回彈�
                 "bilinear": "壓縮回彈高低速阻尼（4 段）", "force": "查表阻尼", "legacy": "舊專案阻尼曲線"}
 MR_MODES = {"fixed": "固定運動比", "lookup": "查表運動比"}
 DAMPER_FIELDS = {
-    "single": {"rate": "阻尼係數 (N·s/m)"},
-    "split": {side: f"{label} (N·s/m)" for side, label in DAMPER_FORCE_LABELS.items()},
+    "single": {"rate": "阻尼"},
+    "split": DAMPER_FORCE_LABELS,
     "bilinear": {
-        f"{side}{suffix}": f"{label}{name} ({unit})"
-        for suffix, name, unit in (("", "低速係數", "N·s/m"), ("_high", "高速係數", "N·s/m"),
-                                   ("_switch", "切換速度", "m/s"))
+        f"{side}{suffix}": f"{label}{name}"
+        for suffix, name in (("", "低速阻尼"), ("_high", "高速阻尼"), ("_switch", "切換速度"))
         for side, label in (("compression", "壓縮"), ("rebound", "回彈"))
     },
 }
@@ -38,14 +41,16 @@ PAGE_TITLES = {"full": "全車", "half_lr": "1/2 左右", "half_fr": "1/2 前後
 
 
 def elastic_curve(component):
-    low, high = -1.1 * component.rebound, 1.1 * component.jounce
+    reference = component.static_stroke if component.static_stroke is not None else 0.
+    low = reference + 1.1 * min(0., -component.rebound - reference)
+    high = reference + 1.1 * component.jounce_travel
     if low == high:
-        low, high = -1., 1.
-    breaks = (*component.spring_breakpoints(), -component.rebound, 0., component.jounce)
+        low, high = reference - 1., reference + 1.
+    breaks = (*component.spring_breakpoints(), -component.rebound, reference, component.jounce)
     stroke = np.array(sorted({low, high, *(x for x in breaks if low < x < high)}))
     spring = np.array([component.spring_force(x) for x in stroke])
     stops = np.array([component.stop_force(x) for x in stroke])
-    return stroke, spring, stops
+    return stroke - reference, spring, stops
 
 
 def motion_ratio_chart(component):
@@ -100,8 +105,13 @@ class SetupApp:
         for key, page in self.analysis_pages.items():
             self.pages.add(page, text=f"  {PAGE_TITLES[key]}  ")
         self.build_vehicle()
+        self.geometry_page = GeometryPage(self)
+        self.pages.add(self.geometry_page, text="  幾何查表  ")
         self.aero_page = AeroPage(self)
         self.pages.add(self.aero_page, text="  空力  ")
+        self.transfer_pages = {kind: LoadTransferPage(self, kind) for kind in TRANSFER_TITLES}
+        for kind, page in self.transfer_pages.items():
+            self.pages.add(page, text=f"  {TRANSFER_TITLES[kind]}  ")
         self.build_components()
         self.set_project(self.project, path)
         self.pages.bind("<<NotebookTabChanged>>", self.tab_changed)
@@ -131,7 +141,7 @@ class SetupApp:
             ttk.Label(tires, text=corner).grid(row=row, column=0, sticky="w")
 
     def build_components(self):
-        page = ttk.Frame(self.pages, padding=12)
+        page = self.component_page = ttk.Frame(self.pages, padding=12)
         self.pages.add(page, text="  彈簧與阻尼  ")
         self.channel_list = ttk.Treeview(page, columns=("channel", "state"), show="headings", height=10, selectmode="browse")
         self.channel_list.heading("channel", text="通道")
@@ -158,6 +168,9 @@ class SetupApp:
                                             values=tuple(DAMPER_MODES[key] for key in (*DAMPER_STAGE_COUNTS, "force")))
         self.damper_selector.pack(side="left", padx=(8, 0))
         self.damper_selector.bind("<<ComboboxSelected>>", lambda event: self.change_damper_mode())
+        self.damper_ratio = tk.BooleanVar()
+        self.damper_ratio_check = ttk.Checkbutton(options, text="使用阻尼比", variable=self.damper_ratio,
+                                                  command=self.change_damper_input)
         imports = ttk.Frame(edit)
         imports.pack(fill="x", pady=(7, 0))
         self.curve_import_buttons = {}
@@ -186,13 +199,19 @@ class SetupApp:
         entry(self.mr_fixed_form, 0, 0, "固定 MR", self.mr_var, width=8)
         self.damper_vars = {key: tk.StringVar() for key in ("rate", *DAMPER_FIELDS["bilinear"])}
         self.damper_forms = {}
+        self.damper_labels = {}
         for mode, fields in DAMPER_FIELDS.items():
             form = ttk.Frame(numeric)
             form.grid(row=4, columnspan=4, sticky="ew")
             form.grid_remove()
             self.damper_forms[mode] = form
-            for index, (key, label) in enumerate(fields.items()):
-                entry(form, index // 2, index % 2 * 2, label, self.damper_vars[key])
+            for index, key in enumerate(fields):
+                row, column = index // 2, index % 2 * 2
+                label = ttk.Label(form)
+                label.grid(row=row, column=column, sticky="w", padx=(0, 8), pady=4)
+                ttk.Entry(form, textvariable=self.damper_vars[key], width=12).grid(
+                    row=row, column=column + 1, sticky="ew", padx=(0, 14), pady=4)
+                self.damper_labels[mode, key] = label
         self.curve_message = ttk.Label(edit)
         charts = ttk.Frame(edit)
         charts.pack(fill="both", expand=True)
@@ -207,15 +226,22 @@ class SetupApp:
         edit.bind("<Destroy>", self.cancel_component_draw)
         for variable in (*self.component_vars.values(), *self.damper_vars.values(), self.mr_var):
             variable.trace_add("write", self.schedule_component_draw)
+        for key in ("m", "lf", "lr", "Ixx", "tf", "tr"):
+            self.vehicle_vars[key].trace_add("write", self.schedule_component_draw)
+        for variables in self.tire_vars.values():
+            variables["mu"].trace_add("write", self.schedule_component_draw)
 
     def set_project(self, project, path):
-        project = with_total_limit_rates(project)
+        project = with_static_tender_travel(with_total_limit_rates(project))
         self.project, self.path = project, path
         sources = {**DEFAULT_SOURCES, **project.get("model_sources", {})}
         for key, source in sources.items():
             self.source_vars[key].set(MODEL_SOURCES[key][source])
         self.name.set(project["name"])
         self.aero_page.set_settings(project.get("aero", AERO_DEFAULTS))
+        self.geometry_page.set_tables(project.get("geometry_tables", {}))
+        for kind, page in self.transfer_pages.items():
+            page.set_options(project.get("load_transfer", {}).get(kind, {}))
         for key, var in self.vehicle_vars.items():
             var.set(project["vehicle"][key])
         for corner, variables in self.tire_vars.items():
@@ -253,6 +279,15 @@ class SetupApp:
             self.refresh_channels()
         elif selected == str(self.aero_page):
             self.aero_page.draw()
+        elif selected == str(self.geometry_page):
+            self.geometry_page.draw()
+        elif selected == str(self.component_page):
+            self.schedule_component_draw()
+        else:
+            for transfer in self.transfer_pages.values():
+                if selected == str(transfer):
+                    transfer.draw()
+                    break
 
     def refresh_channels(self):
         model = self.analysis.model_key
@@ -262,6 +297,7 @@ class SetupApp:
         if self.current_channel not in self.applicable_channels:
             self.channel_list.selection_set(self.applicable_channels[0])
             self.select_channel()
+        self.schedule_component_draw()
 
     def sources(self):
         return {key: key_for(MODEL_SOURCES[key], var.get()) for key, var in self.source_vars.items()}
@@ -306,7 +342,7 @@ class SetupApp:
     def component_mode(self):
         spring = key_for(SPRINGS, self.spring_kind.get())
         spring_fields = {"main_rate": spring in ("single", "tender"),
-                         "tender_rate": spring == "tender", "tender_travel": spring == "tender"}
+                         "tender_rate": spring == "tender", "tender_after_static_mm": spring == "tender"}
         for key, visible in spring_fields.items():
             for widget in self.component_inputs[key]:
                 if visible:
@@ -331,6 +367,15 @@ class SetupApp:
         draft = self.drafts[self.current_channel]
         mode = self.active_damper_mode = damper_mode(draft)
         self.damper_kind.set(DAMPER_MODES[mode])
+        use_ratio = draft.get("damper_ratio", False)
+        self.damper_ratio.set(use_ratio)
+        if mode in DAMPER_STAGE_COUNTS:
+            self.damper_ratio_check.pack(side="left", padx=(8, 0))
+        else:
+            self.damper_ratio_check.pack_forget()
+        for key, label in DAMPER_FIELDS.get(mode, {}).items():
+            suffix = " (m/s)" if key.endswith("_switch") else ("比 (ζ)" if use_ratio else "係數 (N·s/m)")
+            self.damper_labels[mode, key].configure(text=label + suffix)
         for key, form in self.damper_forms.items():
             if key == mode:
                 form.grid()
@@ -351,6 +396,42 @@ class SetupApp:
         if self.active_mr_mode == "fixed":
             self.mr_var.set(draft["mr"][0][1])
 
+    def damping_mass(self):
+        vehicle = {key: float(self.vehicle_vars[key].get()) for key in ("m", "lf", "lr", "Ixx", "tf", "tr")}
+        unsprung = sum(float(variables["mu"].get()) for variables in self.tire_vars.values())
+        return damping_reference_mass(self.current_channel, vehicle, unsprung)
+
+    def change_damper_input(self):
+        self.capture_component()
+        channel = self.current_channel
+        draft = self.drafts[channel]
+        was_ratio = draft.get("damper_ratio", False)
+        use_ratio = self.damper_ratio.get()
+        if use_ratio == was_ratio:
+            return
+        try:
+            settings = self.component(channel)
+            mass = self.damping_mass()
+            critical = KCSystem(settings, damping_mass=mass).critical_damping
+            if use_ratio and critical == 0 and any(value for side in DAMPER_DIRECTIONS for _, value in settings[side]):
+                raise ValueError("零行程的彈簧剛性為 0，無法把非零阻尼係數換算為阻尼比。")
+            scale = 1 / critical if use_ratio and critical else critical
+            converted = {side: [[speed, value * scale] for speed, value in settings[side]] for side in DAMPER_DIRECTIONS}
+            # Validate the converted values before replacing the draft.
+            KCSystem(dict(settings, **converted, damper_kind=self.active_damper_mode, damper_ratio=use_ratio),
+                     damping_mass=mass)
+        except ValueError as exc:
+            self.damper_ratio.set(was_ratio)
+            self.error(exc)
+            return
+        draft.update(converted, damper_kind=self.active_damper_mode)
+        if use_ratio:
+            draft["damper_ratio"] = True
+        else:
+            draft.pop("damper_ratio", None)
+        self.load_curve_controls()
+        self.component_mode()
+
     def change_damper_mode(self):
         mode = key_for(DAMPER_MODES, self.damper_kind.get())
         if mode == self.active_damper_mode:
@@ -360,9 +441,12 @@ class SetupApp:
         draft = self.drafts[channel]
         old_mode = self.active_damper_mode
         old_kind = old_mode if old_mode in DAMPER_STAGE_COUNTS else draft["damper_kind"]
-        self.damper_drafts[channel, old_mode] = {
-            "damper_kind": old_kind, **{side: draft[side] for side in DAMPER_DIRECTIONS}
-        }
+        old_settings = {side: draft[side] for side in DAMPER_DIRECTIONS}
+        old_settings["damper_kind"] = old_kind
+        use_ratio = draft.pop("damper_ratio", False)
+        if use_ratio:
+            old_settings["damper_ratio"] = True
+        self.damper_drafts[channel, old_mode] = old_settings
         previous = self.damper_drafts.get((channel, mode))
         if previous is not None:
             draft.update(previous)
@@ -382,6 +466,8 @@ class SetupApp:
             if mode == "single":
                 rows["rebound"] = rows["compression"].copy()
             draft.update(damper_kind=mode, **rows)
+            if use_ratio or source.get("damper_ratio", False):
+                draft["damper_ratio"] = True
         self.load_curve_controls()
         self.component_mode()
 
@@ -425,6 +511,7 @@ class SetupApp:
             self.spring_kind.set(SPRINGS["force"])
         elif table == "dampers":
             draft["damper_kind"] = "force"
+            draft.pop("damper_ratio", None)
         elif table == "mr":
             draft["mr_mode"] = "lookup"
         self.load_curve_controls()
@@ -461,7 +548,8 @@ class SetupApp:
         self.capture_component()
         try:
             settings = self.component(self.current_channel)
-            component = KCSystem(settings)
+            mass = self.damping_mass() if settings.get("damper_ratio") else None
+            component = KCSystem(settings, damping_mass=mass)
         except ValueError as exc:
             self.curve_message.configure(text=str(exc))
             self.curve_message.pack(fill="x", before=self.spring_chart.master)
@@ -470,9 +558,29 @@ class SetupApp:
             self.mr_chart.set({"series": []})
             return
 
-        self.curve_message.pack_forget()
+        notes = []
+        if component.enabled and self.current_channel in self.applicable_channels:
+            try:
+                vehicle, road = prepare_vehicle(self.collect())
+                vehicle.equilibrium(road.at(0.), include_aero=False)
+                channel_index = tuple(CHANNELS).index(self.current_channel)
+                component = next(kc for i, kc in vehicle.active if i == channel_index)
+                notes.append(f"{PAGE_TITLES[self.analysis.family]}無空力靜態軸心 {component.static_stroke:.3g} mm")
+            except ValueError:
+                component.set_static_reference(0.)
+                notes.append("目前無法求得靜態行程，圖為行程示意。")
+        else:
+            component.set_static_reference(0.)
+            notes.append("此通道目前未參與，圖為行程示意。")
+        if mass is not None:
+            notes.append(f"臨界阻尼 {component.critical_damping:.4g} N·s/m（阻尼比 1.0）")
+        if notes:
+            self.curve_message.configure(text="　｜　".join(notes))
+            self.curve_message.pack(fill="x", before=self.spring_chart.master)
+        else:
+            self.curve_message.pack_forget()
         stroke, spring, stops = elastic_curve(component)
-        self.spring_chart.set({"title": "彈簧與限位合力", "xlabel": "軸心壓縮行程 (mm)", "ylabel": "力 (N)",
+        self.spring_chart.set({"title": "彈簧與限位合力", "xlabel": "相對無空力靜態行程 (mm)", "ylabel": "力 (N)",
                                "x_range": (stroke[0], stroke[-1]),
                                "series": [{"x": stroke.tolist(), "y": (spring + stops).tolist()}]})
 
@@ -484,22 +592,36 @@ class SetupApp:
                                "series": [{"x": speeds, "y": [component.damper_force(speed) for speed in speeds]}]})
         self.mr_chart.set(motion_ratio_chart(component))
 
-    def collect(self, page=None, *, include_pages=False):
+    def collect(self, page=None, *, include_pages=False, case=None):
         self.capture_component()
         page = self.analysis if page is None else page
-        project = {**self.project, **page.case_input(), "name": self.name.get().strip(), "model_sources": self.sources()}
+        run = page.case_input() if case is None else {"model": page.model_key, "case": case}
+        project = {**self.project, **run, "name": self.name.get().strip(), "model_sources": self.sources()}
         project.pop("page_cases", None)
+        project["vehicle"] = self.vehicle_settings()
         try:
-            project["vehicle"] = {key: float(var.get()) for key, var in self.vehicle_vars.items()}
             project["tires"] = {c: {key: float(var.get()) for key, var in variables.items()}
                                 for c, variables in self.tire_vars.items()}
         except ValueError as exc:
-            raise ValueError("車輛與輪胎的欄位須填入數值。") from exc
+            raise ValueError("輪胎的欄位須填入數值。") from exc
         project["channels"] = {key: self.component(key) for key in CHANNELS}
         project["aero"] = self.aero_page.settings()
+        if self.geometry_page.tables:
+            project["geometry_tables"] = deepcopy(self.geometry_page.tables)
+        else:
+            project.pop("geometry_tables", None)
         if include_pages:
             project["page_cases"] = {key: other.case_input() for key, other in self.analysis_pages.items() if other is not page}
+            transfer = {kind: view.options() for kind, view in self.transfer_pages.items()}
+            if "load_transfer" in self.project or any(transfer[kind] != transfer_options(kind, {}) for kind in transfer):
+                project["load_transfer"] = transfer
         return project
+
+    def vehicle_settings(self):
+        try:
+            return {key: float(var.get()) for key, var in self.vehicle_vars.items()}
+        except ValueError as exc:
+            raise ValueError("車輛的欄位須填入數值。") from exc
 
     def editor_state(self):
         project = self.collect(include_pages=True)
@@ -509,6 +631,11 @@ class SetupApp:
     def run(self, page=None):
         if self.job is not None:
             return
+        if page is None:
+            for transfer in self.transfer_pages.values():
+                if self.pages.select() == str(transfer):
+                    transfer.draw()
+                    return
         page = self.analysis if page is None else page
         try:
             project = self.collect(page)

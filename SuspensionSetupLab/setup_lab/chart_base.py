@@ -145,6 +145,8 @@ class Chart(ttk.Frame):
         self.text(10,42,spec.get("ylabel",""),"#94a3b8",9,"w")
         for index,s in enumerate(series+overlays):
             color=s.get("color",COLORS[index%len(COLORS)])
+            marker=s.get("marker")
+            marker_only=s.get("marker_only",False)
             last=None; path=[]
             def flush():
                 if len(path)>=4:self.line(path,color,2,s.get("dash",()))
@@ -152,10 +154,15 @@ class Chart(ttk.Frame):
             for x,y in zip(s["x"],s["y"]):
                 if not self.finite(x) or not self.finite(y): flush(); last=None; continue
                 point=(sx(x),sy(y))
-                if s.get("marker") and left+4 <= point[0] <= right-4 and top+4 <= point[1] <= bottom-4:
+                if marker and left+4 <= point[0] <= right-4 and top+4 <= point[1] <= bottom-4:
                     px,py=point
-                    self.line([px-4,py,px+4,py],color,2)
-                    self.line([px,py-4,px,py+4],color,2)
+                    if marker=="x":
+                        self.line([px-4,py-4,px+4,py+4],color,2)
+                        self.line([px-4,py+4,px+4,py-4],color,2)
+                    else:
+                        self.line([px-4,py,px+4,py],color,2)
+                        self.line([px,py-4,px,py+4],color,2)
+                if marker_only: continue
                 if last is not None:
                     clipped=self.clip(last,point,left,top,right,bottom)
                     if clipped:

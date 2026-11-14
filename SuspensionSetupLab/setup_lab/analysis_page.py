@@ -8,8 +8,8 @@ from tkinter import filedialog, ttk
 import numpy as np
 
 from .chart_base import COLORS
-from .project import (AERO_DEFAULTS, AXES, BUMP_CASES, CASE_DEFAULTS, CASE_FIELDS, CORNERS, MANEUVER_CASES, MODELS,
-                      MODEL_SOURCES, PAGE_MODELS, SCENARIOS, TARGET_WHEELS, case_axes, model_corners,
+from .project import (AERO_DEFAULTS, AXES, BUMP_CASES, CASE_DEFAULTS, CASE_FIELDS, CHANNELS, CORNERS, MANEUVER_CASES,
+                      MODELS, MODEL_SOURCES, PAGE_MODELS, SCENARIOS, TARGET_WHEELS, case_axes, model_corners,
                       read_recording, save_project)
 from .road_profiles import ISO_ROUGHNESS
 from .vehicle_3d import FullVehicleView
@@ -49,10 +49,13 @@ class AnalysisPage(ttk.Frame):
             if row == 3:
                 self.target_widget = widget
         self.case_vars, self.case_widgets = {}, {}
-        for row, (key, (label, _, _)) in enumerate(CASE_FIELDS.items(), len(fields)):
+        case_fields = CASE_FIELDS
+        if family == "quarter":
+            case_fields = {key: spec for key, spec in CASE_FIELDS.items() if key not in ("ax", "ay", "ramp")}
+        for row, (key, (label, _, _)) in enumerate(case_fields.items(), len(fields)):
             self.case_vars[key] = tk.StringVar()
             self.case_widgets[key] = entry(setup, row, 0, label, self.case_vars[key])
-        row = len(fields) + len(CASE_FIELDS)
+        row = len(fields) + len(case_fields)
         self.delay_widget = ttk.Checkbutton(setup, text="選定後輪延遲（軸距 ÷ 車速）", variable=self.rear_delay,
                                             command=self.case_mode)
         self.delay_widget.grid(row=row, columnspan=2, sticky="w", pady=5)
@@ -112,6 +115,9 @@ class AnalysisPage(ttk.Frame):
         self.signal.pack(side="left", fill="x", expand=True)
         self.group.bind("<<ComboboxSelected>>", lambda event: self.select_group())
         self.signal.bind("<<ComboboxSelected>>", lambda event: self.draw_result())
+        if family == "quarter":
+            self.tender_note = ttk.Label(plot, justify="left")
+            plot.bind("<Configure>", lambda event: self.tender_note.configure(wraplength=max(1, event.width - 8)))
         self.chart = ResponseChart(plot)
         if family == "full":
             self.chart.canvas.configure(width=380)
@@ -150,6 +156,7 @@ class AnalysisPage(ttk.Frame):
         case = {**self.case, **values, "scenario": key_for(SCENARIOS, self.scenario.get()),
                 "target": key_for(TARGET_LABELS, self.target.get()), "rear_delay": self.rear_delay.get(),
                 "iso_lateral": self.iso_lateral.get(), "recording": self.recording, "recording_name": self.recording_name}
+        case.pop("quarter_mr", None)
         return {"model": self.model_key, "case": case}
 
     @property
@@ -258,6 +265,8 @@ class AnalysisPage(ttk.Frame):
             self.signal.configure(values=())
             self.chart.cursor(None)
             self.chart.set(None)
+            if self.family == "quarter":
+                self.tender_note.pack_forget()
         else:
             label = f"目前｜{result.project['name']} · {MODELS[result.project['model']]}"
             if result.project["model"] in MODEL_SOURCES:
@@ -289,7 +298,7 @@ class AnalysisPage(ttk.Frame):
             self.details.insert("1.0", "\n\n".join(lines))
             self.group.configure(values=tuple(result.groups))
             if self.group.get() not in result.groups:
-                self.group.set("輪荷")
+                self.group.set("車身姿態" if "車身姿態" in result.groups else "輪荷")
             self.select_group()
         self.details.configure(state="disabled")
 
@@ -298,7 +307,10 @@ class AnalysisPage(ttk.Frame):
         if self.result is None or group not in self.result.groups:
             return
         signals = self.result.groups[group]
-        choices = ["全部", *signals] if len({s.rsplit("[", 1)[1] for s in signals}) == 1 else signals
+        if self.family == "full" and group == "車身姿態":
+            choices = ["全部"]
+        else:
+            choices = ["全部", *signals] if len({s.rsplit("[", 1)[1] for s in signals}) == 1 else signals
         self.signal.configure(values=choices)
         if self.signal.get() not in choices:
             self.signal.current(0)
@@ -326,7 +338,56 @@ class AnalysisPage(ttk.Frame):
                         indices = slice(None)
                     series.append({"name": prefix + name.split(" [", 1)[0], "color": COLORS[index % len(COLORS)],
                                    "dash": dash, "x": run.time[indices].tolist(), "y": y[indices].tolist()})
+        if self.family == "quarter":
+            self.tender_note.pack_forget()
+            if group == "輪端行程":
+                self.draw_travel_limits(series, result, baseline)
+                self.draw_tender_switches(series, result, baseline)
         self.chart.set({"title": group, "xlabel": "時間 (s)", "ylabel": names[0].rsplit("[", 1)[1][:-1], "series": series})
+
+    def draw_travel_limits(self, series, result, baseline):
+        styles = {"compression": ("壓縮限位", "#fb7185"), "rebound": ("伸長限位", "#67e8f9")}
+        for run, prefix, dash in ((result, "B " if baseline else "", (10, 3)), (baseline, "A ", (4, 3, 1, 3))):
+            if run is None:
+                continue
+            for key, limits in run.wheel_travel_limits.items():
+                for direction, travel in limits.items():
+                    label, color = styles[direction]
+                    series.append({"name": f"{prefix}{CHANNELS[key]}{label} {travel:.3g} mm", "color": color,
+                                   "dash": dash, "x": [float(run.time[0]), float(run.time[-1])], "y": [travel, travel]})
+
+    def draw_tender_switches(self, series, result, baseline):
+        notes = []
+        markers = []
+        for run, prefix, colors, dash in ((result, "B " if baseline else "", (COLORS[1], COLORS[2], COLORS[5]), (6, 4)),
+                                          (baseline, "A ", (COLORS[3], COLORS[4], "#e2e8f0"), (2, 4))):
+            if run is None:
+                continue
+            for (key, info), color in zip(run.tender_switches.items(), colors):
+                threshold = info.wheel_threshold_mm
+                name = prefix + CHANNELS[key]
+                series.append({"name": name + "併圈門檻", "color": color, "dash": dash,
+                               "x": [float(run.time[0]), float(run.time[-1])], "y": [threshold, threshold]})
+                binding, release = info.binding_times, info.release_times
+                count = len(binding) + len(release)
+                initial = "主簧段" if info.starts_bound else "串聯段"
+                span = "起始" if count else "全程"
+                note = (f"{name} 門檻 {threshold:.3g} mm（無空力靜態後 {threshold - info.wheel_reference_mm:+.3g} mm）"
+                        f"｜{span}{initial}｜{count} 次切換")
+                if count:
+                    first = release[0] if info.starts_bound else binding[0]
+                    note += f"｜首次 {first:.4f} s"
+                for times, marker in ((binding, "+"), (release, "x")):
+                    if len(times):
+                        markers.append({"color": color, "marker": marker, "marker_only": True,
+                                        "x": times.tolist(), "y": [threshold] * len(times)})
+                notes.append(note)
+        if notes:
+            if markers:
+                notes.append("＋併圈 · × 回到串聯段（依輸出取樣估算）")
+                series.extend(markers)
+            self.tender_note.configure(text="\n".join(notes))
+            self.tender_note.pack(fill="x", before=self.chart, pady=(0, 4))
 
     def export_csv(self):
         if self.result is None:

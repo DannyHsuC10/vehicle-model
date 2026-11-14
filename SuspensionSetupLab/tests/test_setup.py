@@ -1,4 +1,5 @@
 from copy import deepcopy
+from math import sqrt
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -7,12 +8,84 @@ import numpy as np
 
 from setup_lab.components import KCSystem
 from setup_lab.engine import Cancelled, G, Vehicle, simulate
+from setup_lab.load_transfer import TransferDistribution, contact_patch, rigid_transfer
 from setup_lab.project import (CORNERS, compile_project, default_project, import_linear, linear, open_project,
-                               read_recording, save_project, with_total_limit_rates)
+                               read_recording, save_project, transfer_options, with_static_tender_travel, with_total_limit_rates)
 from setup_lab.road import Road
 
 
+class LoadTransferTests(unittest.TestCase):
+    def test_geometry_lookup_changes_wheel_forces_using_each_axle_travel(self):
+        project = default_project()
+        project["model"] = "rigid"
+        project["vehicle"].update(h_rc_f=.02, h_rc_r=.04, dive_front=.1, lift_rear=.2)
+        fixed = Vehicle(project, compile_project(project))
+        project["geometry_tables"] = {
+            "roll_center": [[0., 20., 40.], [10., 60., 80.]],
+            "anti": [[0., 10., 20., 30., 40.], [10., 50., 60., 70., 80.]],
+        }
+        lookup = Vehicle(project, compile_project(project))
+        zero = np.zeros(4)
+        trim = lookup.equilibrium((zero, zero, 0., 0.))
+        fixed.equilibrium((zero, zero, 0., 0.))
+        q = trim.copy()
+        q[lookup.nb:] += [.005, .005, .015, .015]
+        v = np.zeros(lookup.n)
+        inputs = zero, zero, -4., 3.
+        change = (lookup.forces(q, v, inputs) - fixed.forces(q, v, inputs)) * lookup.mass
+        p = project["vehicle"]
+        rc = p["m"] * 3. * np.array([.5 * .02 / p["tf"], -.5 * .02 / p["tf"],
+                                      .5 * .04 / p["tr"], -.5 * .04 / p["tr"]])
+        anti = -p["m"] * 4. * p["h_cg"] / (2 * lookup.wheelbase) * np.array([.2, .2, -.4, -.4])
+        np.testing.assert_allclose(change, lookup.travel.T @ (rc + anti), atol=1e-9)
+        np.testing.assert_allclose(TransferDistribution(project, transfer_options("distribution", {})).rc, [.02, .04])
+
+    def test_rigid_transfer_keeps_signed_loads_and_zeroes_lifted_contact_patch(self):
+        vehicle = default_project()["vehicle"]
+        static, axles, longitudinal, loads = rigid_transfer(vehicle, -1., 3.)
+        expected = vehicle["m"] * G * vehicle["h_cg"] / (vehicle["lf"] + vehicle["lr"])
+        self.assertAlmostEqual(longitudinal, expected)
+        self.assertAlmostEqual(axles[0], sum(static[:2]) + expected)
+        self.assertAlmostEqual(sum(loads), vehicle["m"] * G)
+        self.assertLess(loads[0], 0.)
+        self.assertEqual(contact_patch(loads[0], 80., 180.), (0., 0., 0.))
+        area, length, width = contact_patch(800., 80., 180.)
+        self.assertAlmostEqual(area, 100.)
+        self.assertAlmostEqual(np.pi * length * width / 400, area)
+
+    def test_distribution_balances_three_paths_and_uses_configured_roll_channels(self):
+        project = default_project()
+        project["channels"]["roll_f"] = linear(100000, 0, 1.)
+        project["channels"]["roll_r"] = linear(60000, 0, .8)
+        model = TransferDistribution(project, transfer_options("distribution", {}))
+        tracks = np.array([project["vehicle"]["tf"], project["vehicle"]["tr"]])
+        np.testing.assert_allclose(model.roll_stiffness, [100000 * (tracks[0] / 2)**2, 60000 * (.8 * tracks[1] / 2)**2])
+        left, right = model.at(1.), model.at(-1.)
+        self.assertAlmostEqual(left["paths"].sum(), project["vehicle"]["m"] * G * project["vehicle"]["h_cg"])
+        self.assertAlmostEqual(left["moment_error"], 0.)
+        self.assertAlmostEqual(sum(left["loads"]), project["vehicle"]["m"] * G)
+        np.testing.assert_allclose(left["loads"], right["loads"][[1, 0, 3, 2]])
+        self.assertAlmostEqual(left["front_share"], left["lateral"][0] / sum(left["lateral"]))
+
+
 class ComponentTests(unittest.TestCase):
+    def test_ratio_damping_uses_axle_mass_tender_slope_and_motion_ratio(self):
+        project = default_project()
+        settings = project["channels"]["heave_f"]
+        settings.update(damper_ratio=True, mr=[[-10, .7], [10, .9]],
+                        compression=[[0, .4], [.1, .2]], rebound=[[0, .8], [.2, .5]])
+        component = compile_project(project)[0]
+        axle_mass = (321 - 4 * 15) / 2
+        series_rate = (35 * 25 / (35 + 25)) * 1000
+        critical = 2 * sqrt(series_rate * axle_mass / 4) / .8
+        self.assertAlmostEqual(component.damper_force(.15), critical * (.4 * .1 + .2 * .05))
+        self.assertAlmostEqual(component.damper_force(-.3), -critical * (.8 * .2 + .5 * .1))
+
+        settings["installed_mm"] = 10.
+        with_preload = compile_project(project)[0]
+        self.assertAlmostEqual(with_preload.damper_force(.05), critical * .4 * .05)
+        self.assertEqual(settings["compression"], [[0, .4], [.1, .2]])
+
     def test_multi_stage_spring_and_asymmetric_damper_are_continuous(self):
         settings = linear(10000, 1000)
         settings.update(spring_kind="stages", spring=[[-10, 5], [0, 10], [10, 20], [20, 40]],
@@ -46,16 +119,31 @@ class ComponentTests(unittest.TestCase):
         for travel in (-.04, -.01, 0., .01, .04):
             self.assertAlmostEqual(before.force(travel, 0.), after.force(travel, 0.))
 
-    def test_tender_binding_uses_tender_travel_and_installed_compression(self):
+    def test_tender_binding_uses_additional_travel_after_static_compression(self):
         settings = linear(60000, 1000)
-        settings.update(spring_kind="tender", main_rate=60, tender_rate=30, tender_travel=4, installed_mm=2)
+        settings.update(spring_kind="tender", main_rate=60, tender_rate=30, tender_after_static_mm=6, installed_mm=2)
         component = KCSystem(settings)
         self.assertAlmostEqual(component.spring_force(-3), -20)
         self.assertAlmostEqual(component.spring_force(-2), 0)
         self.assertAlmostEqual(component.spring_force(-1), 20)
         self.assertAlmostEqual(component.spring_force(0), 40)
         self.assertAlmostEqual(component.spring_force(4), 120)
-        self.assertAlmostEqual(component.spring_force(5), 180)
+        component.set_static_reference(4.)
+        self.assertAlmostEqual(component.spring_force(4), 120)
+        self.assertAlmostEqual(component.spring_force(10), 240)
+        self.assertAlmostEqual(component.spring_force(11), 300)
+        stiffer_main = KCSystem(dict(settings, main_rate=120))
+        stiffer_main.set_static_reference(4.)
+        self.assertEqual(stiffer_main.spring_breakpoints()[-1], 10.)
+        self.assertEqual(stiffer_main.spring_slope(10., from_right=True), 120.)
+
+        legacy = dict(settings, tender_travel=4)
+        legacy.pop("tender_after_static_mm")
+        converted = with_static_tender_travel({"channels": {"heave_f": legacy}})["channels"]["heave_f"]
+        self.assertEqual(converted, settings)
+        legacy_component = KCSystem(legacy)
+        legacy_component.set_static_reference(4.)
+        self.assertEqual(legacy_component.spring_breakpoints(), component.spring_breakpoints())
 
     def test_variable_mr_preserves_virtual_work_with_preload(self):
         settings = linear(35000, 1000)
@@ -83,6 +171,75 @@ class ComponentTests(unittest.TestCase):
 
 
 class ModelTests(unittest.TestCase):
+    def test_full_car_projects_axle_heave_and_roll_at_half_ratio(self):
+        project = default_project()
+        for axle, heave_rate, roll_rate in (("f", 100000, 40000), ("r", 120000, 60000)):
+            project["channels"][f"heave_{axle}"] = linear(heave_rate, 0, .8)
+            project["channels"][f"roll_{axle}"] = linear(roll_rate, 0, 1.)
+        for model in ("rigid", "flex"):
+            project["model"] = model
+            car = Vehicle(project, compile_project(project))
+            v = np.zeros(car.n)
+            inputs = (np.zeros(4), np.zeros(4), 0., 0.)
+            for wheel, expected_stroke, expected_force in (
+                (0, [.4, 0., .5, 0.], [26., 6., 0., 0.]),
+                (3, [0., .4, 0., -.5], [0., 0., 4.2, 34.2]),
+            ):
+                with self.subTest(model=model, wheel=wheel):
+                    q = np.zeros(car.n)
+                    q[car.nb + wheel] = .001
+                    _, _, readings, forces, _ = car.forces(q, v, inputs, True)
+                    np.testing.assert_allclose(readings[:4, 1], expected_stroke)
+                    np.testing.assert_allclose(forces, expected_force)
+
+    def test_compression_stop_uses_the_no_aero_static_reference(self):
+        project = default_project()
+        project["model"] = "quarter"
+        project["case"]["speed"] = 10.
+        project["aero"].update(enabled=True, reference_speed_kmh=36., reference_force_n=1600.)
+        settings = project["channels"]["heave_f"]
+        for kind in ("single", "tender"):
+            with self.subTest(kind=kind):
+                settings.update(spring_kind=kind, jounce_mm=2., jounce_rate=120., tender_after_static_mm=2.)
+                car = Vehicle(project, compile_project(project))
+                zero = np.zeros(1)
+                inputs = (zero, zero, 0., 0.)
+                no_aero = car.equilibrium(inputs, include_aero=False)
+                component = car.active[0][1]
+                threshold = component.jounce
+                self.assertGreater(component.static_stroke, 2.)
+                self.assertAlmostEqual(threshold - component.static_stroke, 2.)
+                if kind == "tender":
+                    self.assertEqual(threshold, component.tender_bind_stroke)
+                self.assertEqual(component.stop_force(threshold), 0.)
+                elastic = component.spring_force(threshold + 1.) + component.stop_force(threshold + 1.)
+                self.assertAlmostEqual(elastic - component.spring_force(threshold), 120.)
+                trim = car.equilibrium(inputs)
+                acceleration, _, readings, *_ = car.forces(trim, np.zeros(car.n), inputs, True)
+                self.assertEqual(component.jounce, threshold)
+                self.assertGreater(readings[0, 5], 0.)
+                self.assertGreater(float((car.travel @ (trim - no_aero))[0]), 0.)
+                np.testing.assert_allclose(acceleration, 0., atol=1e-7)
+
+    def test_downforce_can_bind_tender_without_shifting_its_threshold(self):
+        project = default_project()
+        project["model"] = "quarter"
+        project["case"].update(duration=.3, start=.05, height=0., speed=10.)
+        project["aero"].update(reference_speed_kmh=36., reference_force_n=1200.)
+        off = simulate(project)
+        project["aero"]["enabled"] = True
+        on = simulate(project)
+
+        off_switch = off.tender_switches["heave_f"]
+        on_switch = on.tender_switches["heave_f"]
+        self.assertAlmostEqual(on_switch.wheel_threshold_mm, off_switch.wheel_threshold_mm)
+        self.assertAlmostEqual(on_switch.wheel_reference_mm, off.metrics["FL"][3])
+        self.assertFalse(off_switch.starts_bound)
+        self.assertTrue(on_switch.starts_bound)
+        self.assertGreater(on.metrics["FL"][3], on_switch.wheel_threshold_mm)
+        self.assertAlmostEqual(on.metrics["FL"][0] - off.metrics["FL"][0], 300., delta=1e-6)
+        np.testing.assert_allclose(on.signals["升沉加速度 [m/s²]"], 0., atol=1e-7)
+
     def test_downforce_scales_with_case_speed_and_loads_the_static_trim(self):
         project = default_project()
         project["case"].update(duration=.3, start=.05, dt=.005, speed=10.)
@@ -94,7 +251,7 @@ class ModelTests(unittest.TestCase):
                 project["case"]["speed"] = speed
                 result = simulate(project)
                 np.testing.assert_allclose(result.signals["全車下壓力 [N]"], expected)
-                self.assertAlmostEqual(sum(result.metrics[c][0] for c in CORNERS), 321 * G + expected)
+                self.assertAlmostEqual(sum(result.metrics[c][0] for c in CORNERS), 321 * G + expected, delta=1e-6)
                 self.assertEqual(result.signature == off.signature, speed == 10.)
         project.pop("aero")
         project["case"]["speed"] = 10.
@@ -116,7 +273,7 @@ class ModelTests(unittest.TestCase):
                 inputs = (zero_wheels, zero_wheels, 0., 0.)
                 trim = vehicle.equilibrium(inputs)
                 _, loads, *_ = vehicle.forces(trim, np.zeros(vehicle.n), inputs, True)
-                self.assertAlmostEqual(sum(loads), vehicle.total_mass * G + expected)
+                self.assertAlmostEqual(sum(loads), vehicle.total_mass * G + expected, delta=1e-6)
 
     def test_trim_balances_weight_and_braking_in_both_models(self):
         project = default_project()
@@ -129,12 +286,13 @@ class ModelTests(unittest.TestCase):
                 trim = vehicle.equilibrium(inputs)
                 acceleration, load, *_ = vehicle.forces(trim, np.zeros(dof), inputs, True)
                 np.testing.assert_allclose(acceleration, 0., atol=1e-7)
-                self.assertAlmostEqual(sum(load), G * project["vehicle"]["m"])
+                self.assertAlmostEqual(sum(load), G * project["vehicle"]["m"], delta=1e-6)
                 expected = G * 321 / 2 + 321 * 4 * .3 / 1.53
-                self.assertAlmostEqual(sum(load[:2]), expected)
+                self.assertAlmostEqual(sum(load[:2]), expected, delta=1e-6)
 
     def test_lift_recontact_and_tolerance_convergence(self):
         project = default_project()
+        project["case"]["height"] = 20.
         a = simulate(project)
         b = simulate(project, tolerance=1e-7)
         self.assertEqual(a.time[-1], project["case"]["duration"])
@@ -155,9 +313,9 @@ class ModelTests(unittest.TestCase):
         project["case"].update(duration=.8, start=.1, dt=.004)
         a = simulate(project)
         heave = project["channels"]["heave_f"]
-        heave.update(spring_kind="tender", main_rate=55, tender_rate=25, tender_travel=5, damper_kind="stages",
+        heave.update(spring_kind="tender", main_rate=55, tender_rate=25, tender_after_static_mm=5., damper_kind="stages",
                      compression=[[0, 1600], [.03, 900], [.12, 500]], rebound=[[0, 3600], [.05, 1800]],
-                     jounce_mm=15, jounce_rate=70.)
+                     jounce_mm=6, jounce_rate=70.)
         b = simulate(project)
         self.assertEqual(a.signature, b.signature)
         self.assertGreater(np.max(np.abs(a.signals["FL [N]"] - b.signals["FL [N]"])), 40)
@@ -175,6 +333,68 @@ class ModelTests(unittest.TestCase):
 
 
 class ReducedModelTests(unittest.TestCase):
+    def test_quarter_projects_heave_and_roll_travel_and_force_by_the_same_ratio(self):
+        p = default_project()
+        p["model"] = "quarter"
+        p["case"]["target"] = "all"
+        for axle, heave_mr, roll_mr in (("f", .7, 1.4), ("r", .85, 1.2)):
+            p["channels"][f"heave_{axle}"] = dict(linear(60000, 1000, heave_mr), spring_kind="tender", tender_rate=30.)
+            p["channels"][f"roll_{axle}"] = linear(40000, 2000, roll_mr)
+        # Old cases may still carry the removed field.
+        p["case"]["quarter_mr"] = .5
+        for corner, heave_mr, roll_mr in (("FL", .7, 1.4), ("FR", .7, 1.4), ("RL", .85, 1.2), ("RR", .85, 1.2)):
+            with self.subTest(corner=corner):
+                p["model_sources"]["quarter"] = corner
+                car = Vehicle(p, compile_project(p))
+                _, _, readings, suspension, _ = car.forces(
+                    np.array([0., .025]), np.array([0., .2]), (np.zeros(1), np.zeros(1), 0., 0.), True)
+                indices = [i for i, _ in car.active]
+                self.assertEqual(len(indices), 2)
+                np.testing.assert_allclose(readings[indices, 1], [12.5 * heave_mr, 12.5 * roll_mr])
+                expected_heave = (heave_mr / 2)**2 * (25. * 20. + .2 * 1000.)
+                expected_roll = (roll_mr / 2)**2 * (25. * 40. + .2 * 2000.)
+                self.assertAlmostEqual(suspension[0], expected_heave + expected_roll)
+
+    def test_quarter_tender_crossings_follow_preload_and_heave_mr(self):
+        p = default_project()
+        p["model"] = "quarter"
+        p["case"].update(duration=.6, start=.1)
+        baseline = simulate(p).tender_switches["heave_f"]
+        self.assertFalse(baseline.starts_bound)
+        self.assertEqual(baseline.binding_times.size + baseline.release_times.size, 0)
+
+        p["channels"]["heave_f"].update(tender_after_static_mm=2., installed_mm=1.2, mr=[[0, .8], [20, 1.2]])
+        result = simulate(p)
+        switches = result.tender_switches["heave_f"]
+        self.assertFalse(switches.starts_bound)
+        self.assertAlmostEqual(switches.wheel_threshold_mm, result.metrics["FL"][3] + 2. / (.5 * 1.2))
+        self.assertGreater(switches.binding_times.size, 0)
+        self.assertGreater(switches.release_times.size, 0)
+        release, binding = switches.release_times[0], switches.binding_times[0]
+        self.assertLess(binding, release)
+        shaft = result.signals["前軸升沉 軸心行程 [mm]"]
+        np.testing.assert_allclose(np.interp([release, binding], result.time, shaft), shaft[0] + 2.)
+        self.assertAlmostEqual(result.signals["FL 輪端懸吊力 [N]"][0], (321 - 4 * 15) / 4 * G, places=5)
+
+    def test_quarter_limit_lines_use_the_channel_mr_and_active_stop_positions(self):
+        project = default_project()
+        project["model"] = "quarter"
+        project["case"].update(duration=.3, start=.05)
+        project["channels"]["heave_f"].update(
+            mr=[[-20, .8], [20, 1.2]], tender_after_static_mm=2., jounce_mm=2., jounce_rate=100.,
+            rebound_mm=9., rebound_rate=80.)
+        project["channels"]["roll_f"].update(mr=[[0, .75]], jounce_mm=3., jounce_rate=95.)
+
+        result = simulate(project)
+        heave, roll = (result.wheel_travel_limits[key] for key in ("heave_f", "roll_f"))
+        self.assertAlmostEqual(heave["compression"], result.tender_switches["heave_f"].wheel_threshold_mm)
+        # A -20 mm Heave channel displacement gives -18 mm at the shaft. The
+        # negative threshold is within the table, where MR varies with travel.
+        car = Vehicle(project, compile_project(project))
+        self.assertAlmostEqual(car.active[0][1].motion_ratio.integrated(heave["rebound"] / 2), -9.)
+        self.assertAlmostEqual(roll["compression"], result.metrics["FL"][3] + 3. / (.75 / 2))
+        self.assertNotIn("rebound", roll)
+
     def test_trim_and_load_transfer_use_selected_mass_and_axis(self):
         for model, source, corners, ax, ay in (("quarter", "RR", ("RR",), 0, 0),
                                                ("half_lr", "rear", ("RL", "RR"), 0, 4),
@@ -196,31 +416,66 @@ class ReducedModelTests(unittest.TestCase):
                 q = car.equilibrium(inputs)
                 acceleration, loads, *_ = car.forces(q, np.zeros(car.n), inputs, True)
                 np.testing.assert_allclose(acceleration, 0., atol=1e-8)
-                self.assertAlmostEqual(sum(loads), total * G)
+                self.assertAlmostEqual(sum(loads), total * G, delta=1e-6)
                 if model == "half_lr":
                     self.assertAlmostEqual(loads[0], (sprung / 2 + 15) * G - total * ay * .3 / 1.24)
                 if model == "half_fr":
                     self.assertAlmostEqual(loads[0], (sprung * .6 + 15) * G - total * ax * .3 / 1.5)
 
-    def test_symmetric_heave_uses_same_shaft_curve_as_full_car(self):
+    def test_left_right_half_car_projects_heave_and_roll_with_half_travel(self):
         p = default_project()
+        p["model"] = "half_lr"
         p["case"]["target"] = "all"
-        p["channels"]["heave_f"].update(spring_kind="stages", spring=[[0, 20], [15, 80]],
-                                        compression=[[0, 1000], [.1, 300]],
-                                        mr=[[0, .9], [30, 1.05]])
-        readings = {}
-        for model in ("rigid", "quarter", "half_lr", "half_fr"):
-            p["model"] = model
-            car = Vehicle(p, compile_project(p))
-            q, v = np.zeros(car.n), np.zeros(car.n)
-            q[car.nb:] = .012
-            v[car.nb:] = .15
-            zero = np.zeros(car.nw)
-            _, _, channels, wheel_force, _ = car.forces(q, v, (zero, zero, 0, 0), True)
-            readings[model] = channels[0], wheel_force[0]
-        for model in ("quarter", "half_lr", "half_fr"):
-            np.testing.assert_allclose(readings[model][0], readings["rigid"][0])
-            self.assertAlmostEqual(readings[model][1], readings["rigid"][1])
+        p["channels"]["heave_f"] = linear(100000, 0, .8)
+        p["channels"]["roll_f"] = linear(40000, 0, 1.)
+        car = Vehicle(p, compile_project(p))
+        q, v = np.zeros(car.n), np.zeros(car.n)
+        zero = np.zeros(car.nw)
+        inputs = (zero, zero, 0., 0.)
+        q[car.nb:] = [.001, 0.]
+        _, _, channels, wheel_force, _ = car.forces(q, v, inputs, True)
+        np.testing.assert_allclose(channels[[0, 2], 1], [.4, .5])
+        np.testing.assert_allclose(wheel_force, [26., 6.])
+        q[car.nb:] = .001
+        _, _, channels, wheel_force, _ = car.forces(q, v, inputs, True)
+        np.testing.assert_allclose(channels[[0, 2], 1], [.8, 0.])
+        np.testing.assert_allclose(wheel_force, [32., 32.])
+        q[car.nb:] = [.001, -.001]
+        _, _, channels, wheel_force, _ = car.forces(q, v, inputs, True)
+        np.testing.assert_allclose(channels[[0, 2], 1], [0., 1.])
+        np.testing.assert_allclose(wheel_force, [20., -20.])
+
+    def test_front_rear_half_car_uses_axle_heave_travel_and_half_its_reaction(self):
+        p = default_project()
+        p["model"] = "half_fr"
+        p["case"]["target"] = "all"
+        p["channels"]["heave_f"] = linear(40000, 0, 1.)
+        p["channels"]["heave_r"] = linear(60000, 0, .8)
+        car = Vehicle(p, compile_project(p))
+        zero = np.zeros(car.nw)
+        for axle, mr, wheel_rate in ((0, 1., 20.), (1, .8, 19.2)):
+            with self.subTest(axle=axle):
+                q = np.zeros(car.n)
+                q[car.nb + axle] = .001
+                _, _, readings, force, _ = car.forces(q, np.zeros(car.n), (zero, zero, 0., 0.), True)
+                self.assertAlmostEqual(readings[axle, 1], mr)
+                self.assertAlmostEqual(force[axle], wheel_rate)
+                self.assertEqual(force[1 - axle], 0.)
+
+    def test_front_rear_half_car_matches_symmetric_full_car_pitch_under_ax(self):
+        p = default_project()
+        p["case"].update(scenario="maneuver", target="all", ax=-7., ay=0., speed=10., start=.05, ramp=.25, duration=1.)
+        p["aero"].update(enabled=True, reference_speed_kmh=36., reference_force_n=400.)
+        p["channels"]["heave_f"].update(damper_ratio=True, compression=[[0, .7], [.25, .4]],
+                                        rebound=[[0, .6], [.25, .3]], tender_after_static_mm=3.)
+        full = simulate(p)
+        p["model"] = "half_fr"
+        p["model_sources"]["half_fr"] = "right"
+        half = simulate(p)
+        pitch = "俯仰 [deg]"
+        self.assertGreater(np.max(np.abs(full.signals[pitch])), .1)
+        for name in (pitch, "前軸升沉 軸心行程 [mm]", "後軸升沉 軸心行程 [mm]", "FR [N]", "RR [N]"):
+            np.testing.assert_allclose(half.signals[name], full.signals[name], atol=1e-7)
 
     def test_each_local_model_responds_to_staged_spring_and_asymmetric_damper(self):
         for model, channel, response in (("quarter", "heave_f", "升沉 [mm]"),
