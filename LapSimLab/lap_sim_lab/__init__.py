@@ -1,1 +1,0 @@
-"""Standalone LapSim desktop workbench."""
