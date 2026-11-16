@@ -1,86 +1,143 @@
-"""Standalone views of the two quasi-static load transfer calculations."""
+"""Quasi-static load transfer and tire contact patch views."""
 
 import math
 import tkinter as tk
-from tkinter import ttk
+from tkinter import filedialog, ttk
 
 import numpy as np
 
 from .chart_base import COLORS, Chart
-from .load_transfer import TransferDistribution, contact_patch, rigid_transfer
-from .components import number
-from .project import CORNERS, TRANSFER_FIELDS, VEHICLE_FIELDS, default_project, transfer_options
+from .lateral_tire import DEFAULT_TIR, import_tir
+from .load_transfer import TransferDistribution, contact_patch
+from .project import CONTACT_FIELDS, CORNERS, TRANSFER_FIELDS, default_project, transfer_options
 from .widgets import entry
 
 
-TITLES = {"rigid": "剛體載重轉移", "distribution": "載重轉移分配"}
-
-
 class LoadTransferPage(ttk.Frame):
-    def __init__(self, app, kind):
+    def __init__(self, app):
         super().__init__(app.pages, padding=10)
-        self.app, self.kind = app, kind
+        self.app = app
+        self.contact_model = None
         self.fields = {}
         setup = ttk.LabelFrame(self, text="工況與輪胎參數", padding=8)
         setup.pack(fill="x")
-        for i, (key, (label, *_)) in enumerate(TRANSFER_FIELDS[kind].items()):
+        for i, (key, (label, *_)) in enumerate(TRANSFER_FIELDS.items()):
             variable = self.fields[key] = tk.StringVar()
             entry(setup, i // 3, 2 * (i % 3), label, variable, width=8)
         row = (len(self.fields) + 2) // 3
-        ttk.Button(setup, text="更新計算", command=self.draw).grid(row=row, column=0, sticky="w", pady=(4, 0))
-        hint = ("正 ax 為加速，負 ax 為煞車。正 ay 為左轉。"
-                if kind == "rigid" else "正 ay 為左轉。空力依彎道半徑與 ay 換算車速。")
-        ttk.Label(setup, text=hint).grid(row=row, column=1, columnspan=5, sticky="w")
+        tire = ttk.Frame(setup)
+        tire.grid(row=row, column=0, columnspan=6, sticky="w", pady=(4, 0))
+        self.tir_source = None
+        self.tir_name = tk.StringVar(value=DEFAULT_TIR)
+        ttk.Label(tire, text="前後軸 TIR").pack(side="left", padx=(0, 6))
+        ttk.Entry(tire, textvariable=self.tir_name, state="readonly", width=42).pack(side="left", padx=(0, 6))
+        ttk.Button(tire, text="匯入 .tir", command=self.choose_tir).pack(side="left", padx=(0, 6))
+        self.tir_reset = ttk.Button(tire, text="恢復預設", command=self.reset_tir, state="disabled")
+        self.tir_reset.pack(side="left")
+        ttk.Button(setup, text="更新計算", command=self.draw).grid(row=row + 1, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(setup, text="正 ay 為左轉").grid(row=row + 1, column=1, columnspan=5, sticky="w")
         self.readout = ttk.Label(self, justify="left", padding=(0, 6))
         self.readout.pack(anchor="w", fill="x")
         self.views = ttk.Notebook(self)
         self.views.pack(fill="both", expand=True, pady=(6, 0))
-        labels = (("輪荷", "接地面") if kind == "rigid"
-                  else ("輪荷", "側傾", "載重轉移分配", "三路徑力矩", "穩態轉向", "不足轉向", "抓地"))
         tables = ttk.Frame(self.views, padding=8)
         self.views.add(tables, text="計算明細")
-        if kind == "rigid":
-            headers = ("輪位", "靜態輪荷 (N)", "輪荷 (N)", "接地面積 (cm²)", "接地長 (mm)", "接地寬 (mm)")
-        else:
-            headers = ("輪位", "基準輪荷 (N)", "輪荷 (N)", "側向力需求 (N)", "滑角 (°)")
+        headers = ("輪位", "基準輪荷 (N)", "輪荷 (N)", "側向力 (N)", "滑角 (°)")
         self.wheels = self.table(tables, headers, 4)
-        if kind == "distribution":
-            self.paths = self.table(tables, ("力矩路徑", "前軸 (N·m)", "後軸 (N·m)"), 3)
-            self.balance = ttk.Label(tables, justify="left")
-            self.balance.pack(anchor="w", pady=(4, 0))
+        self.paths = self.table(tables, ("力矩路徑", "前軸 (N·m)", "後軸 (N·m)"), 3)
+        self.balance = ttk.Label(tables, justify="left")
+        self.balance.pack(anchor="w", pady=(4, 0))
         self.charts = {}
-        for label in labels:
+        for label in ("輪荷", "側傾", "載重轉移分配", "三路徑力矩", "穩態轉向", "不足轉向", "抓地"):
             chart = self.charts[label] = Chart(self.views)
             chart.canvas.configure(width=600, height=260)
             self.views.add(chart, text=label)
+        self.build_contact_view()
         self.views.select(self.charts["輪荷"])
 
-    def table(self, parent, headers, height):
+    def build_contact_view(self):
+        self.contact_view = view = ttk.Frame(self.views, padding=8)
+        self.views.add(view, text="接地面")
+        controls = ttk.Frame(view)
+        controls.pack(fill="x", pady=(0, 6))
+        ttk.Label(controls, text="預覽側向加速度 (g)").pack(side="left", padx=(0, 8))
+        _, _, low, high = TRANSFER_FIELDS["ay"]
+        self.contact_ay = tk.DoubleVar()
+        self.contact_slider = ttk.Scale(controls, from_=low, to=high, variable=self.contact_ay,
+                                       command=self.update_contact)
+        self.contact_slider.pack(side="left", fill="x", expand=True)
+        self.contact_label = ttk.Label(controls, width=9, anchor="e")
+        self.contact_label.pack(side="left")
+
+        sidebar = ttk.Frame(view)
+        sidebar.pack(side="right", fill="y", padx=(8, 0))
+        tires = ttk.LabelFrame(sidebar, text="接地面參數", padding=6)
+        tires.pack(fill="x", pady=(0, 8))
+        for row, (key, (label, *_)) in enumerate(CONTACT_FIELDS.items()):
+            variable = self.fields[key] = tk.StringVar()
+            entry(tires, row, 0, label, variable, width=8)
+        headers = ("輪位", "輪荷 (N)", "面積 (cm²)", "長 (mm)", "寬 (mm)")
+        self.contact_wheels = self.table(sidebar, headers, 4, widths=(45, 68, 76, 62, 62))
+        self.contact_readout = ttk.Label(sidebar, justify="left")
+        self.contact_readout.pack(anchor="w")
+        chart = self.charts["接地面"] = Chart(view)
+        chart.canvas.configure(width=530, height=260)
+        chart.pack(fill="both", expand=True)
+        self.contact_angles = np.linspace(0., 2 * math.pi, 65)
+
+    def table(self, parent, headers, height, *, widths=None):
         table = ttk.Treeview(parent, columns=headers, show="headings", height=height)
-        for name in headers:
+        for name, width in zip(headers, widths or (118,) * len(headers)):
             table.heading(name, text=name)
-            table.column(name, width=118, minwidth=64, anchor="center")
+            table.column(name, width=width, minwidth=min(width, 64), anchor="center")
         table.pack(fill="x", pady=(0, 4))
         return table
 
     def set_options(self, values):
-        for key, value in transfer_options(self.kind, values).items():
-            self.fields[key].set(value)
+        for key, variable in self.fields.items():
+            variable.set(values[key])
+        self.set_tir(values.get("tire_tir"))
         self.clear()
+
+    def set_tir(self, source):
+        self.tir_source = source
+        self.tir_name.set(source["name"] if source else DEFAULT_TIR)
+        self.tir_reset.state(["!disabled"] if source else ["disabled"])
+
+    def choose_tir(self):
+        path = filedialog.askopenfilename(parent=self, title="匯入 MF6.1 TIR", filetypes=[("TIR", "*.tir")])
+        if not path:
+            return
+        try:
+            source = import_tir(path)
+        except (OSError, ValueError) as exc:
+            self.app.error(exc)
+            return
+        self.set_tir(source)
+        self.draw()
+
+    def reset_tir(self):
+        self.set_tir(None)
+        self.draw()
 
     def options(self):
         try:
             values = {key: float(var.get()) for key, var in self.fields.items()}
         except ValueError as exc:
-            raise ValueError(f"{TITLES[self.kind]}欄位須填入數值。") from exc
-        return transfer_options(self.kind, values)
+            raise ValueError("載重轉移分配欄位須填入數值。") from exc
+        if self.tir_source is not None:
+            values["tire_tir"] = self.tir_source
+        return transfer_options(values)
 
     def clear(self):
         self.readout.configure(text="")
-        self.wheels.delete(*self.wheels.get_children())
-        if self.kind == "distribution":
-            self.paths.delete(*self.paths.get_children())
-            self.balance.configure(text="")
+        for table in (self.wheels, self.paths, self.contact_wheels):
+            table.delete(*table.get_children())
+        self.balance.configure(text="")
+        self.contact_label.configure(text="")
+        self.contact_readout.configure(text="")
+        self.contact_model = None
+        self.contact_slider.state(["disabled"])
         for chart in self.charts.values():
             chart.set(None)
 
@@ -88,53 +145,65 @@ class LoadTransferPage(ttk.Frame):
         self.clear()
         try:
             options = self.options()
-            if self.kind == "rigid":
-                vehicle = self.app.vehicle_settings()
-                for key in ("m", "h_cg", "lf", "lr", "tf", "tr"):
-                    number(vehicle[key], *VEHICLE_FIELDS[key])
-                self.draw_rigid(vehicle, options)
-            else:
-                case = {**default_project()["case"], "target": "all"}
-                project = self.app.collect(self.app.analysis_pages["full"], case=case)
-                self.draw_distribution(TransferDistribution(project, options), options["ay"])
+            case = {**default_project()["case"], "target": "all"}
+            project = self.app.collect(self.app.analysis_pages["full"], case=case)
+            model = TransferDistribution(project, options)
+            self.draw_distribution(model, options["ay"])
+            self.set_contact_model(model, options["ay"])
         except ValueError as exc:
+            self.clear()
             self.readout.configure(text=str(exc))
 
     @staticmethod
     def number(value, digits=1):
         return "—" if value is None else f"{value:.{digits}f}"
 
-    def plot(self, key, x, curves, unit, *, xlabel="側向加速度 (g)", equal=False):
+    def plot(self, key, x, curves, unit):
         series = [{"name": name, "color": COLORS[i % len(COLORS)], "x": x, "y": list(y)}
                   for i, (name, y) in enumerate(curves)]
-        self.charts[key].set(dict(title=key, xlabel=xlabel, ylabel=unit, series=series, equal=equal))
+        self.charts[key].set(dict(title=key, xlabel="側向加速度 (g)", ylabel=unit, series=series))
 
-    def draw_rigid(self, vehicle, options):
-        static, axles, longitudinal, loads = rigid_transfer(vehicle, options["ax"], options["ay"])
-        patches = []
-        for i, corner in enumerate(CORNERS):
-            end = "f" if i < 2 else "r"
-            patch = contact_patch(loads[i], options[f"pressure_{end}"], options[f"width_{end}"])
-            patches.append(patch)
-            self.wheels.insert("", "end", values=(corner, *(self.number(value) for value in (static[i], loads[i], *patch))))
-        lift = "、".join(corner for corner, load in zip(CORNERS, loads) if load <= 0)
-        note = f"　｜　抬輪：{lift}" if lift else ""
-        self.readout.configure(text=f"前軸 {axles[0]:.1f} N　｜　後軸 {axles[1]:.1f} N　｜　轉移至前軸 {longitudinal:+.1f} N{note}")
-        bound = max(2., abs(options["ay"]))
-        ay = np.unique(np.r_[np.linspace(-bound, bound, 81), options["ay"]]).tolist()
-        scan = np.array([rigid_transfer(vehicle, options["ax"], value)[3] for value in ay])
-        self.plot("輪荷", ay, zip(CORNERS, scan.T), "輪荷 (N)")
-        theta = np.linspace(0., 2 * math.pi, 65)
+    def set_contact_model(self, model, ay):
+        self.contact_model = model
+        _, _, low, high = TRANSFER_FIELDS["ay"]
+        # With the current aero law, wheel loads are linear on either side of zero g.
+        peak_loads = np.max([model.load_state(g)["loads"] for g in (low, 0., high)], axis=0)
+        patches = self.contact_patches(peak_loads)
+        half_length = max(length / 2 for _, length, _ in patches)
+        half_span = max(track * 500 + width / 2 for track, (_, _, width) in zip(np.repeat(model.track, 2), patches))
+        self.contact_bounds = (-model.wheelbase * 1000 - half_length, half_length, -half_span, half_span)
+        self.contact_ay.set(ay)
+        self.contact_slider.state(["!disabled"])
+        self.update_contact(ay)
+
+    def contact_patches(self, loads):
+        options = self.contact_model.options
+        return [contact_patch(load, options[f"pressure_{axle}"], options[f"width_{axle}"])
+                for load, axle in zip(loads, ("f", "f", "r", "r"))]
+
+    def update_contact(self, value):
+        model = self.contact_model
+        if model is None:
+            return
+        ay = float(value)
+        self.contact_label.configure(text=f"{ay:+.2f} g")
+        data = model.load_state(ay)
+        loads = data["loads"]
+        self.contact_wheels.delete(*self.contact_wheels.get_children())
         series = []
-        for i, (corner, (_, length, width)) in enumerate(zip(CORNERS, patches)):
-            front = i < 2
-            x = 0. if front else -1000 * (vehicle["lf"] + vehicle["lr"])
-            y = (1 if i % 2 == 0 else -1) * 500 * vehicle["tf" if front else "tr"]
-            series.append({"name": corner, "x": (x + length / 2 * np.cos(theta)).tolist() if width else [x],
-                           "y": (y + width / 2 * np.sin(theta)).tolist() if width else [y],
+        for i, (corner, load, (area, length, width)) in enumerate(zip(CORNERS, loads, self.contact_patches(loads))):
+            self.contact_wheels.insert("", "end", values=(corner, *(self.number(v) for v in (load, area, length, width))))
+            x = 0. if i < 2 else -1000 * model.wheelbase
+            y = (1 if i % 2 == 0 else -1) * 500 * model.track[i // 2]
+            series.append({"name": corner, "x": (x + length / 2 * np.cos(self.contact_angles)).tolist() if width else [x],
+                           "y": (y + width / 2 * np.sin(self.contact_angles)).tolist() if width else [y],
                            "marker": "x" if width == 0 else False})
+        lift = "、".join(corner for corner, load in zip(CORNERS, loads) if load <= 0)
+        front, rear = data["lateral"]
+        self.contact_readout.configure(text=f"前軸轉移量 {front:+.1f} N\n後軸轉移量 {rear:+.1f} N"
+                                           + (f"\n抬輪 {lift}" if lift else ""))
         self.charts["接地面"].set(dict(title="接地面橢圓", xlabel="縱向，向前為正 (mm)", ylabel="橫向，向左為正 (mm)",
-                                      equal=True, series=series))
+                                      equal=True, fit_bounds=self.contact_bounds, series=series), keep_view=True)
 
     def draw_distribution(self, model, ay):
         data = model.at(ay)
@@ -157,9 +226,10 @@ class LoadTransferPage(ttk.Frame):
         lift = "、".join(corner for corner, load in zip(CORNERS, data["loads"]) if load <= 0)
         note = f"　｜　抬輪：{lift}" if lift else ""
         front_share = self.number(None if data["front_share"] is None else 100 * data["front_share"])
+        grip = "／".join("—" if value is None else f"{value:.1%}" for value in data["grip"])
         self.readout.configure(text=(
             f"前軸 LLTD {front_share}%　｜　側傾 {data['roll']:.3f}°　｜　車速 {data['speed_kmh']:.1f} km/h{note}\n"
-            f"前／後抓地 {data['grip'][0]:.1%}／{data['grip'][1]:.1%}　｜　轉向 {self.number(data['steer'], 2)}°"
+            f"前／後相對抓地 {grip}　｜　轉向 {self.number(data['steer'], 2)}°"
             f"　｜　不足轉向 {self.number(data['understeer'], 2)}°/g"))
         bound = max(min(2.5, float(lift_limit)), abs(ay), .05)
         x = np.unique(np.r_[np.linspace(-bound, bound, 81), ay]).tolist()
@@ -171,4 +241,5 @@ class LoadTransferPage(ttk.Frame):
         self.plot("三路徑力矩", x, zip(path_names, np.array([d["paths"].flatten() for d in scan]).T), "力矩 (N·m)")
         self.plot("穩態轉向", x, [("穩態轉向", [d["steer"] for d in scan])], "轉向角 (°)")
         self.plot("不足轉向", x, [("不足轉向梯度", [d["understeer"] for d in scan])], "梯度 (°/g)")
-        self.plot("抓地", x, zip(("前軸", "後軸"), 100 * np.array([d["grip"] for d in scan]).T), "剩餘抓地 (%)")
+        grip_percent = [[None if d["grip"][i] is None else 100 * d["grip"][i] for d in scan] for i in range(2)]
+        self.plot("抓地", x, zip(("前軸", "後軸"), grip_percent), "相對抓地 (%)")

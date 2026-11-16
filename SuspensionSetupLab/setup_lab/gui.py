@@ -1,6 +1,5 @@
 """Offline desktop workspace for vehicle setup, replay and matched A/B runs."""
 
-from copy import deepcopy
 from pathlib import Path
 from queue import Empty, Queue
 import threading
@@ -14,13 +13,17 @@ from .aero_page import AeroPage
 from .chart_base import Chart
 from .components import DAMPER_DIRECTIONS, DAMPER_STAGE_COUNTS, KCSystem, damper_kinds
 from .engine import Cancelled, prepare_vehicle, simulate
+from .geometry_lookup import VEHICLE_KEYS as GEOMETRY_VEHICLE_KEYS
 from .geometry_page import GeometryPage
-from .load_transfer_page import LoadTransferPage, TITLES as TRANSFER_TITLES
+from .load_transfer_page import LoadTransferPage
 from .project import (AERO_DEFAULTS, APP, CHANNELS, COMPONENT_FIELDS, CORNERS, DAMPER_FORCE_LABELS,
-                      DEFAULT_DAMPER_SWITCH_SPEED, DEFAULT_SOURCES, MODEL_PAGE, MODEL_SOURCES, PAGE_MODELS,
-                      TIRE_FIELDS, VEHICLE_FIELDS, analysis_page_cases, compile_project, damping_reference_mass,
-                      default_project, model_channels, model_corners, open_project, read_force_csv, save_project, transfer_options,
+                      DEFAULT_DAMPER_SWITCH_SPEED, DEFAULT_SOURCES, MODEL_PAGE, MODEL_SOURCES, PAGE_MODELS, ROLL_FRAME_FIELDS,
+                      TIRE_FIELDS, VEHICLE_FIELDS, analysis_page_cases, channel_enabled, compile_project, damping_reference_mass,
+                      default_project, load_transfer_options, model_channels, model_corners, open_project, project_roll_frame,
+                      read_force_csv, roll_frame_options, save_project, transfer_options,
                       with_static_tender_travel, with_total_limit_rates)
+from .roll_center_scan import scan_roll_center
+from .simulation_export import export_simulation
 from .widgets import entry, key_for
 
 SPRINGS = {"single": "單一彈簧", "tender": "主簧＋Tender", "force": "查表彈簧剛性", "stages": "舊專案彈簧曲線"}
@@ -109,9 +112,8 @@ class SetupApp:
         self.pages.add(self.geometry_page, text="  幾何查表  ")
         self.aero_page = AeroPage(self)
         self.pages.add(self.aero_page, text="  空力  ")
-        self.transfer_pages = {kind: LoadTransferPage(self, kind) for kind in TRANSFER_TITLES}
-        for kind, page in self.transfer_pages.items():
-            self.pages.add(page, text=f"  {TRANSFER_TITLES[kind]}  ")
+        self.transfer_page = LoadTransferPage(self)
+        self.pages.add(self.transfer_page, text="  載重轉移分配  ")
         self.build_components()
         self.set_project(self.project, path)
         self.pages.bind("<<NotebookTabChanged>>", self.tab_changed)
@@ -119,16 +121,18 @@ class SetupApp:
             root.bind(sequence, lambda event, action=command: action())
 
     def build_vehicle(self):
-        page = ttk.Frame(self.pages, padding=14)
+        page = self.vehicle_page = ttk.Frame(self.pages, padding=14)
         self.pages.add(page, text="  車輛與輪胎  ")
         self.vehicle_vars = {}
-        body = ttk.LabelFrame(page, text="整車、車架與幾何傳力", padding=12)
+        body = ttk.LabelFrame(page, text="整車與車架", padding=12)
         body.pack(fill="x")
-        for index, (key, (label, _, _)) in enumerate(VEHICLE_FIELDS.items()):
+        fields = [key for key in VEHICLE_FIELDS if key not in GEOMETRY_VEHICLE_KEYS]
+        for index, key in enumerate(fields):
             self.vehicle_vars[key] = tk.StringVar()
-            entry(body, index // 2, index % 2 * 2, label, self.vehicle_vars[key], 16)
-        ttk.Label(body, text="Anti 採比例輸入，例如 0.15 = 15%。只有 8 DOF 車架使用扭轉 k、c。").grid(
-            row=8, columnspan=4, sticky="w", pady=(8, 0))
+            entry(body, index // 2, index % 2 * 2, VEHICLE_FIELDS[key][0], self.vehicle_vars[key], 16)
+        ttk.Label(body, text="只有 8 DOF 車架使用扭轉 k、c。").grid(
+            row=(len(fields) + 1) // 2, columnspan=4, sticky="w", pady=(8, 0))
+        self.build_roll_frame_form(page)
         tires = ttk.LabelFrame(page, text="每輪簧下質量與輪胎垂直特性", padding=12)
         tires.pack(fill="x", pady=10)
         self.tire_vars = {c: {} for c in CORNERS}
@@ -140,26 +144,48 @@ class SetupApp:
         for row, corner in enumerate(CORNERS, 1):
             ttk.Label(tires, text=corner).grid(row=row, column=0, sticky="w")
 
+    def build_roll_frame_form(self, page):
+        form = ttk.LabelFrame(page, text="1/2 左右｜Roll Center 車架傳力", padding=12)
+        form.pack(fill="x", pady=(10, 0))
+        self.roll_frame_enabled = tk.BooleanVar()
+        ttk.Checkbutton(form, text="啟用車架傳力動態", variable=self.roll_frame_enabled,
+                        command=self.roll_frame_mode).grid(row=0, columnspan=4, sticky="w")
+        self.roll_frame_vars, self.roll_frame_widgets = {}, {}
+        for index, (key, (label, *_)) in enumerate(ROLL_FRAME_FIELDS.items()):
+            var = self.roll_frame_vars[key] = tk.StringVar()
+            self.roll_frame_widgets[key] = entry(form, 1 + index // 2, 2 * (index % 2), label, var, width=16)
+
+    def roll_frame_mode(self):
+        state = "normal" if self.roll_frame_enabled.get() else "disabled"
+        for widget in self.roll_frame_widgets.values():
+            widget.configure(state=state)
+
     def build_components(self):
         page = self.component_page = ttk.Frame(self.pages, padding=12)
         self.pages.add(page, text="  彈簧與阻尼  ")
-        self.channel_list = ttk.Treeview(page, columns=("channel", "state"), show="headings", height=10, selectmode="browse")
+        sidebar = ttk.Frame(page)
+        sidebar.pack(side="left", fill="y", padx=(0, 10))
+        self.channel_list = ttk.Treeview(sidebar, columns=("channel",), show="headings", height=10, selectmode="browse")
         self.channel_list.heading("channel", text="通道")
-        self.channel_list.heading("state", text="目前模型")
-        self.channel_list.column("channel", width=120, stretch=False)
-        self.channel_list.column("state", width=68, stretch=False, anchor="center")
+        self.channel_list.column("channel", width=140, stretch=False)
         for key, label in CHANNELS.items():
-            self.channel_list.insert("", "end", iid=key, values=(label, ""))
-        self.channel_list.pack(side="left", fill="y", padx=(0, 10))
+            self.channel_list.insert("", "end", iid=key, values=(label,))
+        self.channel_list.pack(fill="x")
         self.channel_list.bind("<<TreeviewSelect>>", lambda event: self.select_channel())
+        model_checks = ttk.LabelFrame(sidebar, text="此通道啟用於", padding=8)
+        model_checks.pack(fill="x", pady=(8, 0))
+        self.channel_model_vars, self.channel_model_checks = {}, {}
+        for family, label in PAGE_TITLES.items():
+            var = self.channel_model_vars[family] = tk.BooleanVar()
+            check = self.channel_model_checks[family] = ttk.Checkbutton(
+                model_checks, text=f"{label}模型", variable=var, command=self.change_channel_models)
+            check.pack(anchor="w", pady=2)
         edit = ttk.Frame(page)
         edit.pack(side="left", fill="both", expand=True)
         options = ttk.Frame(edit)
         options.pack(fill="x")
-        self.enabled = tk.BooleanVar()
         self.spring_kind = tk.StringVar()
         self.damper_kind = tk.StringVar()
-        ttk.Checkbutton(options, text="啟用此通道", variable=self.enabled, command=self.capture_component).pack(side="left", padx=(0, 8))
         self.spring_selector = ttk.Combobox(options, textvariable=self.spring_kind, state="readonly", width=17,
                                             values=(SPRINGS["single"], SPRINGS["tender"], SPRINGS["force"]))
         self.spring_selector.pack(side="left")
@@ -239,11 +265,15 @@ class SetupApp:
             self.source_vars[key].set(MODEL_SOURCES[key][source])
         self.name.set(project["name"])
         self.aero_page.set_settings(project.get("aero", AERO_DEFAULTS))
-        self.geometry_page.set_tables(project.get("geometry_tables", {}))
-        for kind, page in self.transfer_pages.items():
-            page.set_options(project.get("load_transfer", {}).get(kind, {}))
+        self.geometry_page.set_settings(project)
+        self.transfer_page.set_options(load_transfer_options(project.get("load_transfer", {})))
         for key, var in self.vehicle_vars.items():
             var.set(project["vehicle"][key])
+        frame = project_roll_frame(project)
+        self.roll_frame_enabled.set(frame["enabled"])
+        for key, var in self.roll_frame_vars.items():
+            var.set(frame[key])
+        self.roll_frame_mode()
         for corner, variables in self.tire_vars.items():
             for key, var in variables.items():
                 var.set(project["tires"][corner][key])
@@ -283,18 +313,13 @@ class SetupApp:
             self.geometry_page.draw()
         elif selected == str(self.component_page):
             self.schedule_component_draw()
-        else:
-            for transfer in self.transfer_pages.values():
-                if selected == str(transfer):
-                    transfer.draw()
-                    break
+        elif selected == str(self.transfer_page):
+            self.transfer_page.draw()
 
     def refresh_channels(self):
         model = self.analysis.model_key
         self.applicable_channels = model_channels(model, model_corners(model, self.sources()))
-        for key in CHANNELS:
-            self.show_channel_state(key)
-        if self.current_channel not in self.applicable_channels:
+        if self.current_channel is None:
             self.channel_list.selection_set(self.applicable_channels[0])
             self.select_channel()
         self.schedule_component_draw()
@@ -307,7 +332,7 @@ class SetupApp:
         if key is None:
             return
         draft = self.drafts[key]
-        draft.update(enabled=self.enabled.get(), spring_kind=key_for(SPRINGS, self.spring_kind.get()))
+        draft["spring_kind"] = key_for(SPRINGS, self.spring_kind.get())
         draft.update({name: var.get() for name, var in self.component_vars.items()})
         mode = self.active_damper_mode
         if mode in DAMPER_STAGE_COUNTS:
@@ -319,11 +344,22 @@ class SetupApp:
                                         self.damper_vars[f"{side}_high"].get()])
         if self.active_mr_mode == "fixed":
             draft["mr"] = [[draft["mr"][0][0], self.mr_var.get()]]
-        self.show_channel_state(key)
 
-    def show_channel_state(self, key):
-        state = "啟用" if self.drafts[key]["enabled"] else "停用"
-        self.channel_list.set(key, "state", state if key in self.applicable_channels else "不參與")
+    def change_channel_models(self):
+        draft = self.drafts[self.current_channel]
+        overrides = draft.get("enabled_models", {}).copy()
+        for family, var in self.channel_model_vars.items():
+            if self.channel_model_checks[family].instate(("disabled",)):
+                continue
+            if var.get() == draft["enabled"]:
+                overrides.pop(family, None)
+            else:
+                overrides[family] = var.get()
+        if overrides:
+            draft["enabled_models"] = overrides
+        else:
+            draft.pop("enabled_models", None)
+        self.schedule_component_draw()
 
     def select_channel(self):
         selection = self.channel_list.selection()
@@ -332,7 +368,11 @@ class SetupApp:
         self.capture_component()
         self.current_channel = selection[0]
         draft = self.drafts[self.current_channel]
-        self.enabled.set(draft["enabled"])
+        for family, var in self.channel_model_vars.items():
+            # Use all possible corners so changing a model's selected axle or side leaves the controls stable.
+            supported = self.current_channel in model_channels(PAGE_MODELS[family][0], CORNERS)
+            var.set(supported and channel_enabled(draft, family))
+            self.channel_model_checks[family].state(["!disabled" if supported else "disabled"])
         self.spring_kind.set(SPRINGS[draft["spring_kind"]])
         for key, var in self.component_vars.items():
             var.set(draft[key])
@@ -559,7 +599,7 @@ class SetupApp:
             return
 
         notes = []
-        if component.enabled and self.current_channel in self.applicable_channels:
+        if self.current_channel in self.applicable_channels and channel_enabled(settings, self.analysis.family):
             try:
                 vehicle, road = prepare_vehicle(self.collect())
                 vehicle.equilibrium(road.at(0.), include_aero=False)
@@ -571,7 +611,7 @@ class SetupApp:
                 notes.append("目前無法求得靜態行程，圖為行程示意。")
         else:
             component.set_static_reference(0.)
-            notes.append("此通道目前未參與，圖為行程示意。")
+            notes.append(f"{PAGE_TITLES[self.analysis.family]}的選定輪位或啟用設定未使用此通道，圖為行程示意。")
         if mass is not None:
             notes.append(f"臨界阻尼 {component.critical_damping:.4g} N·s/m（阻尼比 1.0）")
         if notes:
@@ -600,42 +640,56 @@ class SetupApp:
         project.pop("page_cases", None)
         project["vehicle"] = self.vehicle_settings()
         try:
+            frame = {key: float(var.get()) for key, var in self.roll_frame_vars.items()}
+        except ValueError as exc:
+            raise ValueError("車架傳力欄位須填入數值。") from exc
+        frame["enabled"] = self.roll_frame_enabled.get()
+        if frame != roll_frame_options({}) or "roll_center_frame" in self.project:
+            project["roll_center_frame"] = frame
+        try:
             project["tires"] = {c: {key: float(var.get()) for key, var in variables.items()}
                                 for c, variables in self.tire_vars.items()}
         except ValueError as exc:
             raise ValueError("輪胎的欄位須填入數值。") from exc
         project["channels"] = {key: self.component(key) for key in CHANNELS}
         project["aero"] = self.aero_page.settings()
-        if self.geometry_page.tables:
-            project["geometry_tables"] = deepcopy(self.geometry_page.tables)
-        else:
-            project.pop("geometry_tables", None)
+        project.pop("geometry_tables", None)
+        project.pop("geometry_modes", None)
+        project.update(self.geometry_page.settings())
         if include_pages:
             project["page_cases"] = {key: other.case_input() for key, other in self.analysis_pages.items() if other is not page}
-            transfer = {kind: view.options() for kind, view in self.transfer_pages.items()}
-            if "load_transfer" in self.project or any(transfer[kind] != transfer_options(kind, {}) for kind in transfer):
-                project["load_transfer"] = transfer
+            transfer = self.transfer_page.options()
+            if "load_transfer" in self.project or transfer != transfer_options({}):
+                project["load_transfer"] = {"distribution": transfer}
         return project
 
     def vehicle_settings(self):
         try:
-            return {key: float(var.get()) for key, var in self.vehicle_vars.items()}
+            values = {key: float(var.get()) for key, var in self.vehicle_vars.items()}
         except ValueError as exc:
             raise ValueError("車輛的欄位須填入數值。") from exc
+        values.update(self.geometry_page.fixed_settings())
+        return values
 
     def editor_state(self):
         project = self.collect(include_pages=True)
         project["page_cases"][self.analysis.family] = {key: project.pop(key) for key in ("model", "case")}
         return project
 
-    def run(self, page=None):
+    def run_csv(self, page):
         if self.job is not None:
             return
-        if page is None:
-            for transfer in self.transfer_pages.values():
-                if self.pages.select() == str(transfer):
-                    transfer.draw()
-                    return
+        path = filedialog.asksaveasfilename(parent=self.root, defaultextension=".csv", initialfile="simulation.csv",
+                                            filetypes=[("CSV", "*.csv")])
+        if path:
+            self.run(page, csv_path=Path(path))
+
+    def run(self, page=None, *, scan=False, csv_path=None):
+        if self.job is not None:
+            return
+        if page is None and self.pages.select() == str(self.transfer_page):
+            self.transfer_page.draw()
+            return
         page = self.analysis if page is None else page
         try:
             project = self.collect(page)
@@ -648,14 +702,30 @@ class SetupApp:
         self.job = threading.Event()
         page.progress["value"] = 0
         self.set_running(True)
-        self.status.set(f"{PAGE_TITLES[page.family]}正在求解靜態平衡及動態反應…")
-        threading.Thread(target=self.worker, args=(project, self.job), daemon=True).start()
-        self.root.after(50, self.poll)
+        if scan:
+            page.show_scan_running()
+            self.status.set("正在掃描 21 個 Roll Center 高度…")
+        elif csv_path is not None:
+            self.status.set(f"{PAGE_TITLES[page.family]}正在純計算並寫入 CSV…")
+        else:
+            self.status.set(f"{PAGE_TITLES[page.family]}正在求解靜態平衡及動態反應…")
+        # Let the export worker remove its temporary file if the app closes.
+        threading.Thread(target=self.worker, args=(project, self.job, scan, csv_path),
+                         daemon=csv_path is None).start()
+        self.root.after(50, self.poll, scan)
 
-    def worker(self, project, cancel):
+    def worker(self, project, cancel, scan=False, csv_path=None):
+        progress = lambda fraction: self.events.put(("progress", fraction))
         try:
-            result = simulate(project, cancel.is_set, lambda fraction: self.events.put(("progress", fraction)))
-            self.events.put(("done", result))
+            if scan:
+                result = scan_roll_center(project, cancel.is_set, progress)
+                self.events.put(("scan_done", result))
+            elif csv_path is not None:
+                count, warnings = export_simulation(project, csv_path, cancel.is_set, progress)
+                self.events.put(("csv_done", (csv_path, count, warnings)))
+            else:
+                result = simulate(project, cancel.is_set, progress)
+                self.events.put(("done", result))
         except Cancelled:
             self.events.put(("cancelled", None))
         except Exception as exc:
@@ -669,14 +739,17 @@ class SetupApp:
     def set_running(self, running):
         for page in self.analysis_pages.values():
             page.run_button.configure(state="disabled" if running else "normal")
+            page.compute_csv_button.configure(state="disabled" if running else "normal")
             page.stop_button.configure(state="normal" if running else "disabled")
+            if page.family == "half_lr":
+                page.scan_button.configure(state="disabled" if running else "normal")
 
-    def poll(self):
+    def poll(self, scan=False):
         while True:
             try:
                 kind, payload = self.events.get_nowait()
             except Empty:
-                self.root.after(50, self.poll)
+                self.root.after(50, self.poll, scan)
                 return
             if kind == "progress":
                 self.running_page.progress["value"] = 100 * payload
@@ -688,10 +761,20 @@ class SetupApp:
             if kind == "done" and not cancelled:
                 page.set_result(payload)
                 self.status.set(f"{PAGE_TITLES[page.family]}已完成 {len(payload.time):,} 筆輸出。")
+            elif kind == "scan_done" and not cancelled:
+                page.show_scan_result(payload)
+                self.status.set("Roll Center 掃描完成。")
+            elif kind == "csv_done":
+                path, count, warnings = payload
+                self.status.set("　｜　".join([f"已匯出 {path.name}（{count:,} 筆）", *warnings]))
             elif kind == "error" and not cancelled:
+                if scan:
+                    page.show_scan_stopped("掃描失敗。")
                 self.status.set("計算失敗。")
                 self.error(payload)
             else:
+                if scan:
+                    page.show_scan_stopped("已停止掃描。")
                 self.status.set("已停止計算。")
             return
 

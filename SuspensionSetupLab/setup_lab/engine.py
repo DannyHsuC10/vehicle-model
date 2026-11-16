@@ -8,8 +8,8 @@ import math
 import numpy as np
 
 from .geometry_lookup import GeometryLookup, FIELDS as GEOMETRY_FIELDS
-from .project import (AERO_DEFAULTS, AXES, CHANNELS, CORNERS, QUARTER_MODAL_CHANNELS, compile_project, downforce,
-                      model_channels, model_corners)
+from .project import (AERO_DEFAULTS, AXES, CHANNELS, CORNERS, QUARTER_MODAL_CHANNELS, channel_enabled, compile_project, downforce,
+                      model_channels, model_corners, project_roll_frame)
 from .road import Road
 from .road_profiles import ISO_FREQUENCY_BAND
 
@@ -33,8 +33,8 @@ class Vehicle:
         self.geometry_reference_mm = np.zeros(2)
         self.axes = AXES[model]
         self.flex = model == "flex"
-        tables = project.get("geometry_tables", {})
-        self.uses_geometry_lookup = (self.axes[0] and "anti" in tables) or (self.axes[1] and "roll_center" in tables)
+        kinds = self.geometry.active_kinds
+        self.uses_geometry_lookup = (self.axes[0] and "anti" in kinds) or (self.axes[1] and "roll_center" in kinds)
         lf, lr = p["lf"], p["lr"]
         self.wheelbase = lf + lr
         self.share = p["lr"] / self.wheelbase
@@ -70,9 +70,17 @@ class Vehicle:
             self.B = np.array([[1, half_f, lf], [1, -half_f, lf], [1, half_r, -lr], [1, -half_r, -lr]])
             inertia = [p["Ixx"], p["Iyy"]]
         self.nb = 1 + len(inertia)
+        self.wheels = slice(self.nb, self.nb + self.nw)
         self.mass = np.array([self.sprung, *inertia, *mu])
-        self.n = self.mass.size
         self.travel = np.column_stack((-self.B, np.eye(self.nw)))
+        self.roll_frame = None
+        if model == "half_lr":
+            frame = project_roll_frame(project)
+            if frame["enabled"]:
+                self.roll_frame = frame
+                self.mass = np.append(self.mass, frame["mass"])
+                self.travel = np.pad(self.travel, ((0, 0), (0, 1)))
+        self.n = self.mass.size
         self.axle_travel = self.axle_average @ self.travel
         wheel_map = MODAL[:, wheel_indices]
         self.modal = wheel_map.copy()
@@ -95,7 +103,8 @@ class Vehicle:
                        if key in allowed and component.enabled]
         self.tire_k = np.array([project["tires"][c]["k"] * 1000 for c in self.corners])
         self.tire_c = np.array([project["tires"][c]["c"] for c in self.corners])
-        self.weight = np.array([-G * self.sprung, *([0.] * (self.nb - 1)), *(-G * mu)])
+        self.weight = np.zeros(self.n)
+        self.weight[0], self.weight[self.wheels] = -G * self.sprung, -G * mu
         aero = project.get("aero", AERO_DEFAULTS)
         self.aero_downforce = downforce(aero, project["case"]["speed"] * 3.6) if aero["enabled"] else 0.
         self.corner_aero = self.aero_downforce / 2 * axle_shares
@@ -110,12 +119,20 @@ class Vehicle:
         self.anti_scale = 1 / ((self.nw / 2) * self.wheelbase)
 
     def tire_load(self, q, v, height, road_velocity):
-        penetration = np.maximum(0., height - q[self.nb:])
+        penetration = np.maximum(0., height - q[self.wheels])
         # Fade viscous force into contact over the first millimetre of compression.
         contact = np.minimum(1., penetration / .001)
-        return np.maximum(0., self.tire_k * penetration + contact * self.tire_c * (road_velocity - v[self.nb:]))
+        return np.maximum(0., self.tire_k * penetration + contact * self.tire_c * (road_velocity - v[self.wheels]))
 
-    def forces(self, q, v, inputs, details=False, *, include_aero=True):
+    def roll_center_forces(self, ay, axle_travel):
+        rc = (self.rc_front * self.geometry.value("h_rc_f", axle_travel)
+              + self.rc_rear * self.geometry.value("h_rc_r", axle_travel))
+        return (self.total_mass * ay) * rc
+
+    def frame_reaction(self, displacement, velocity):
+        return self.roll_frame["stiffness"] * displacement + self.roll_frame["damping"] * velocity
+
+    def forces(self, q, v, inputs, details=False, *, include_aero=True, steady_frame=False):
         height, road_velocity, ax, ay = inputs
         x, speed = self.channel_travel @ q, self.channel_travel @ v
         channel = np.zeros(len(CHANNELS))
@@ -134,7 +151,7 @@ class Vehicle:
         # Downforce acts vertically at the sprung centre of gravity.
         if include_aero:
             total[0] -= self.aero_load
-        total[self.nb:] += tire
+        total[self.wheels] += tire
         twist_moment = 0.
         if self.flex:
             twist_moment = p["body_twist_k"] * (q[1] - q[2]) + p["body_twist_c"] * (v[1] - v[2])
@@ -152,9 +169,16 @@ class Vehicle:
                 total[1:3] += moment * self.roll_split
             else:
                 total[1] += moment
-            rc = (self.rc_front * self.geometry.value("h_rc_f", axle_travel)
-                  + self.rc_rear * self.geometry.value("h_rc_r", axle_travel))
-            total += self.travel.T @ (fy * rc)
+        if self.axes[1] and (ay or self.roll_frame):
+            rc = self.roll_center_forces(ay, axle_travel)
+            if self.roll_frame:
+                # As in lab_rollcenter, the body sees the commanded RC moment immediately.
+                reaction = self.frame_reaction(q[-1], v[-1])
+                total[-1] = rc[0] - reaction
+                total[:self.nb] += self.travel[:, :self.nb].T @ rc
+                total[self.wheels] += rc if steady_frame else (reaction, -reaction)
+            else:
+                total += self.travel.T @ rc
         if ax and self.axes[0]:
             moment = self.total_mass * ax * p["h_cg"]
             total[self.nb - 1] += moment
@@ -189,7 +213,7 @@ class Vehicle:
         differences = np.eye(self.n) * eps
 
         def residual(q):
-            return self.forces(q, zero, static_input, include_aero=include_aero) * self.mass
+            return self.forces(q, zero, static_input, include_aero=include_aero, steady_frame=True) * self.mass
 
         def tangent(q):
             return np.column_stack([(residual(q + step) - residual(q - step)) / (2 * eps) for step in differences])
@@ -198,8 +222,8 @@ class Vehicle:
         guesses = [] if initial is None else [initial.copy()]
         for clearance in (.005, .025, .06, .12):
             q = np.zeros(self.n)
-            q[self.nb:] = height - nominal_load / self.tire_k
-            q[0] = np.mean(q[self.nb:]) - clearance
+            q[self.wheels] = height - nominal_load / self.tire_k
+            q[0] = np.mean(q[self.wheels]) - clearance
             guesses.append(q)
         for q in guesses:
             for _ in range(40):
@@ -207,7 +231,10 @@ class Vehicle:
                 norm = np.linalg.norm(force)
                 if norm < 1e-6:
                     jacobian = tangent(q)
-                    stiffness = -(jacobian + jacobian.T) / 2
+                    # The passive frame is in equilibrium at k*x = command; assess the vehicle at that limit.
+                    physical = self.wheels.stop
+                    static_jacobian = jacobian[:physical, :physical]
+                    stiffness = -(static_jacobian + static_jacobian.T) / 2
                     if np.linalg.eigvalsh(stiffness)[0] > 1e-7 and np.all(self.tire_load(q, zero, height, zero_wheel) > 0):
                         return q
                     break
@@ -268,30 +295,52 @@ def prepare_vehicle(project):
 
 
 def simulate(project, cancel=lambda: False, progress=lambda value: None, *, tolerance=1e-6):
-    if not math.isfinite(tolerance) or tolerance <= 0:
-        raise ValueError("積分容許誤差必須大於零。")
     project = deepcopy(project)
     vehicle, road = prepare_vehicle(project)
     if cancel():
         raise Cancelled()
-    equilibrium = vehicle.equilibrium(road.at(0.))
-    n = vehicle.n
     dt = project["case"]["dt"]
-    time = np.arange(math.ceil(road.duration / dt)) * dt
-    time = np.append(time[time < road.duration - 1e-12], road.duration)
-    history = np.zeros((len(time), 2 * n))
+    if road.duration / dt > 30000:
+        raise ValueError("動畫模式最多輸出 30,001 筆。請使用「純計算並匯出 CSV」，或增加輸出間隔。")
+    equilibrium = vehicle.equilibrium(road.at(0.))
+    time = np.fromiter(output_times(road.duration, dt), dtype=float)
+    history = np.empty((len(time), 2 * vehicle.n))
+    for i, (_, state, attempts) in enumerate(integrate_samples(vehicle, road, equilibrium, time, cancel, tolerance=tolerance)):
+        history[i] = state
+        if i % 32 == 0:
+            progress(.9 * i / (len(time) - 1))
+    result = make_result(vehicle, road, project, equilibrium, time, history, attempts, cancel)
+    progress(1.)
+    return result
+
+
+def output_times(duration, dt):
+    for i in range(math.ceil(duration / dt)):
+        t = i * dt
+        if t < duration - 1e-12:
+            yield t
+    yield duration
+
+
+def integrate_samples(vehicle, road, equilibrium, time, cancel, *, tolerance=1e-6):
+    if not math.isfinite(tolerance) or tolerance <= 0:
+        raise ValueError("積分容許誤差必須大於零。")
+    n = vehicle.n
+    case = road.options
+    dt = case["dt"]
+    max_attempts = max(600000, 2 * math.ceil(road.duration / dt))
     state = np.zeros(2 * n)
     stages = np.empty((7, 2 * n))
     limit = .005
     if road.bump:
-        limit = min(limit, project["case"]["period"] / 20)
+        limit = min(limit, case["period"] / 20)
     elif road.iso:
-        limit = min(limit, 1 / (40 * ISO_FREQUENCY_BAND[1] * project["case"]["speed"]))
-        if road.duration / limit > 600000:
-            raise ValueError("ISO 路面需要超過 600,000 個積分步，請縮短模擬時間或降低車速。")
+        limit = min(limit, 1 / (40 * ISO_FREQUENCY_BAND[1] * case["speed"]))
+        if road.duration / limit > max_attempts:
+            raise ValueError(f"ISO 路面需要超過 {max_attempts:,} 個積分步，請縮短模擬時間或降低車速。")
     step, attempts, now = min(dt, limit), 0, 0.
 
-    for i, sample in enumerate(time[1:], 1):
+    for sample in time:
         event_index = bisect_right(road.events, now + 1e-12)
         while now < sample - 1e-12:
             if cancel():
@@ -299,7 +348,7 @@ def simulate(project, cancel=lambda: False, progress=lambda value: None, *, tole
             end = min(sample, road.events[event_index]) if event_index < len(road.events) else sample
             h = min(step, end - now)
             attempts += 1
-            if attempts > 600000 or h <= 1e-12:
+            if attempts > max_attempts or h <= 1e-12:
                 raise ValueError("積分無法達到誤差容許值。請檢查極端剛性、阻尼或路面資料。")
             last = now + h
             if road.iso and h == end - now and end in road.iso_onsets:
@@ -321,15 +370,10 @@ def simulate(project, cancel=lambda: False, progress=lambda value: None, *, tole
                     event_index += 1
             factor = 4. if error == 0. else min(4., max(.15, .9 * error**-.2))
             step = min(limit, h * factor)
-        history[i] = state
-        if i % 32 == 0:
-            progress(.9 * i / (len(time) - 1))
-    result = make_result(vehicle, road, project, equilibrium, time, history, attempts, cancel)
-    progress(1.)
-    return result
+        yield sample, state, attempts
 
 
-def quarter_wheel_threshold(mr, wheel_factor, shaft_threshold):
+def wheel_travel_threshold(mr, wheel_factor, shaft_threshold):
     # Positive motion ratio makes shaft travel monotonic in channel travel.
     low, high = sorted((shaft_threshold / max(mr.y), shaft_threshold / min(mr.y)))
     for _ in range(54):
@@ -341,9 +385,9 @@ def quarter_wheel_threshold(mr, wheel_factor, shaft_threshold):
     return float((low + (high - low) / 2) / wheel_factor)
 
 
-def quarter_tender_switches(component, wheel_factor, time, stroke, wheel_reference_mm):
+def tender_crossings(component, wheel_factor, time, stroke, wheel_reference_mm):
     shaft_threshold = component.tender_bind_stroke
-    wheel_threshold = quarter_wheel_threshold(component.motion_ratio, wheel_factor, shaft_threshold)
+    wheel_threshold = wheel_travel_threshold(component.motion_ratio, wheel_factor, shaft_threshold)
     distance = stroke - shaft_threshold
     if component.tender_after_static == 0.:
         distance[np.abs(distance) < 1e-7] = 0.
@@ -399,7 +443,7 @@ def make_result(vehicle, road, project, equilibrium, time, history, steps, cance
     if vehicle.uses_geometry_lookup:
         geometry_travel = q @ vehicle.axle_travel.T * 1000 - vehicle.geometry_reference_mm
         for kind, supported in (("roll_center", vehicle.axes[1]), ("anti", vehicle.axes[0])):
-            if supported and kind in project.get("geometry_tables", {}):
+            if supported and kind in vehicle.geometry.active_kinds:
                 group, unit = ("Roll Center", "mm") if kind == "roll_center" else ("Anti", "%")
                 for _, label, key, axle, units in GEOMETRY_FIELDS[kind]:
                     if vehicle.axle_average[axle].any():
@@ -412,9 +456,29 @@ def make_result(vehicle, road, project, equilibrium, time, history, steps, cance
     elapsed = np.diff(time)
     metrics = {}
     warnings = list(project["notes"])
+    if project["model"] == "half_lr":
+        # The RC force acts on the unsprung mass; the tire balances it in the opposite direction.
+        axle_travel = geometry_travel if vehicle.uses_geometry_lookup else np.zeros((len(time), 2))
+        geometry_force = np.array([vehicle.roll_center_forces(ay, stroke)
+                                   for ay, stroke in zip(command[:, 1], axle_travel)])
+        geometric = (geometry_force[:, 0] - geometry_force[:, 1]) / 2
+        if vehicle.roll_frame:
+            add("車架傳力", "Roll Center 指令", "N", geometric)
+            geometric = vehicle.frame_reaction(q[:, -1], v[:, -1])
+            add("車架傳力", "Roll Center 傳遞力", "N", geometric)
+        elastic = (suspension[:, 1] - suspension[:, 0]) / 2
+        tire = (loads[:, 1] - loads[:, 0]) / 2
+        peaks = metrics["load_transfer_rate"] = {}
+        for label, transfer in (("幾何", geometric), ("懸吊", elastic), ("路徑合計", geometric + elastic), ("輪胎端", tire)):
+            change = transfer - transfer[0]
+            rate = np.gradient(change, time)
+            add("載重轉移量", f"{label}載重轉移量", "N", change)
+            add("載重轉移速率", f"{label}載重轉移速率", "N/s", rate)
+            peak = np.argmax(np.abs(rate))
+            peaks[label] = (rate[peak], time[peak])
     if project["model"] == "quarter":
         modes = model_channels("quarter", vehicle.corners)[:-1]
-        disabled = [CHANNELS[key] for key in modes if not project["channels"][key]["enabled"]]
+        disabled = [CHANNELS[key] for key in modes if not channel_enabled(project["channels"][key], "quarter")]
         if disabled:
             warnings.append("單輪模型未計入已停用的通道：" + "、".join(disabled) + "。")
     for i, corner in enumerate(vehicle.corners):
@@ -433,6 +497,11 @@ def make_result(vehicle, road, project, equilibrium, time, history, steps, cance
         groups["ISO 路面"] = [f"路面 {corner} [mm]" for corner in vehicle.corners]
     tender_switches = {}
     wheel_travel_limits = {}
+    travel_wheels = {}
+    if project["model"] == "quarter":
+        travel_wheels = dict.fromkeys(model_channels("quarter", vehicle.corners), 0)
+    elif project["model"] == "half_fr":
+        travel_wheels = {"heave_f": 0, "heave_r": 1}
     for i, component in vehicle.active:
         key = tuple(CHANNELS)[i]
         group = CHANNELS[key]
@@ -440,12 +509,14 @@ def make_result(vehicle, road, project, equilibrium, time, history, steps, cance
         for j, (label, unit) in enumerate(zip(labels, ("N", "mm", "m/s", "N", "N", "N"))):
             add(group, f"{group} {label}", unit, readings[:, i, j])
         stroke = readings[:, i, 1]
-        if project["model"] == "quarter":
-            wheel_factor = vehicle.channel_travel[i, -1]
+        if key in travel_wheels:
+            wheel = travel_wheels[key]
+            # Use the displacement map. The half-car scales only the returned Heave force.
+            wheel_factor = vehicle.modal[i, wheel]
             if component.spring_kind == "tender":
-                tender_switches[key] = quarter_tender_switches(component, wheel_factor, time, stroke,
-                                                              float(vehicle.tender_reference_wheel_mm[0]))
-            limits = {direction: quarter_wheel_threshold(component.motion_ratio, wheel_factor, shaft)
+                tender_switches[key] = tender_crossings(component, wheel_factor, time, stroke,
+                                                       float(vehicle.tender_reference_wheel_mm[wheel]))
+            limits = {direction: wheel_travel_threshold(component.motion_ratio, wheel_factor, shaft)
                       for direction, rate, shaft in (("compression", component.jounce_rate, component.jounce),
                                                      ("rebound", component.rebound_rate, -component.rebound))
                       if rate}
@@ -466,6 +537,6 @@ def make_result(vehicle, road, project, equilibrium, time, history, steps, cance
     metrics["body_rms"] = math.sqrt(np.sum((heave_a2[1:] + heave_a2[:-1]) * elapsed / 2) / time[-1])
     signature = (project["model"], vehicle.corners, road.signature(), project["case"]["speed"])
     # Metres at the body attachment, wheel centre offset and road for each corner.
-    motion = np.stack((q[:, :nb] @ vehicle.B.T, q[:, nb:], roads), axis=-1)
+    motion = np.stack((q[:, :nb] @ vehicle.B.T, q[:, vehicle.wheels], roads), axis=-1)
     return Result(time, signals, groups, project, signature, metrics, warnings, steps, vehicle.corners, motion,
                   tender_switches, wheel_travel_limits)

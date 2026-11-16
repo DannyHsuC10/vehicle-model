@@ -18,22 +18,31 @@ SEGMENT_LABELS={"projection_upper":"Upper projection","projection_lower":"Lower 
 
 
 class Chart(ttk.Frame):
-    def __init__(self,master,*,min_width=300):
+    def __init__(self,master,*,min_width=300,empty_message="設定參數後按「計算」"):
         super().__init__(master)
         self.min_width=min_width
+        self.empty_message=empty_message
         self.canvas=tk.Canvas(self,bg=BG,highlightthickness=0,width=800,height=470)
         self.canvas.pack(fill="both",expand=True)
         self.spec=None; self.primitives=[]; self.view=None; self.drag=None
         self.azimuth=-.65; self.elevation=.5
-        self.canvas.bind("<Configure>",lambda event:self.draw())
+        self.canvas.bind("<Configure>", lambda event: self.resize())
         self.canvas.bind("<MouseWheel>",self.zoom)
         self.canvas.bind("<Button-1>",lambda e:setattr(self,"drag",(e.x,e.y)))
         self.canvas.bind("<B1-Motion>",self.pan)
         self.canvas.bind("<Double-Button-1>",lambda e:self.reset())
         self.canvas.bind("<Motion>",self.hover)
 
-    def set(self,spec):
-        self.spec=spec; self.view=None; self.draw()
+    def set(self, spec, *, keep_view=False):
+        self.spec = spec
+        if not keep_view:
+            self.view = None
+        self.draw()
+
+    def resize(self):
+        if self.spec and self.spec.get("equal"):
+            self.view = None
+        self.draw()
 
     def reset(self):
         self.view=None; self.draw()
@@ -62,7 +71,7 @@ class Chart(ttk.Frame):
         compact=width<300
         spec=self.spec
         if not spec:
-            self.text(width/2,height/2,"設定參數後按「計算」",size=15)
+            self.text(width/2,height/2,self.empty_message,size=15)
             return
         series=spec.get("series",[])
         overlays=[]
@@ -115,7 +124,10 @@ class Chart(ttk.Frame):
         top=64+max(0,legend_y-45)
         pw,ph=max(right-left,1),max(bottom-top,1)
         if self.view is None:
-            xs,ys=zip(*pairs); xmin,xmax=min(xs),max(xs); ymin,ymax=min(ys),max(ys)
+            if "fit_bounds" in spec:
+                xmin, xmax, ymin, ymax = spec["fit_bounds"]
+            else:
+                xs,ys=zip(*pairs); xmin,xmax=min(xs),max(xs); ymin,ymax=min(ys),max(ys)
             dx=xmax-xmin or max(abs(xmax)*.2,1); dy=ymax-ymin or max(abs(ymax)*.2,1)
             xmin,xmax=spec.get("x_range",(xmin-dx*.06,xmax+dx*.06))
             ymin-=dy*.12; ymax+=dy*.12
@@ -159,6 +171,11 @@ class Chart(ttk.Frame):
                     if marker=="x":
                         self.line([px-4,py-4,px+4,py+4],color,2)
                         self.line([px-4,py+4,px+4,py-4],color,2)
+                    elif marker in ("triangle_up", "triangle_down"):
+                        tip = -4 if marker == "triangle_up" else 4
+                        self.line([px, py+tip, px+4, py-tip, px-4, py-tip, px, py+tip], color, 2)
+                    elif marker == "diamond":
+                        self.line([px, py-4, px+4, py, px, py+4, px-4, py, px, py-4], color, 2)
                     else:
                         self.line([px-4,py,px+4,py],color,2)
                         self.line([px,py-4,px,py+4],color,2)

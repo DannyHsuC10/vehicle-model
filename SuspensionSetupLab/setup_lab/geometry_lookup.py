@@ -20,16 +20,33 @@ FIELDS = {
     ),
 }
 TITLES = {"roll_center": "Roll Center", "anti": "Anti"}
+VEHICLE_KEYS = frozenset(key for fields in FIELDS.values() for _, _, key, _, _ in fields)
+MODES = {"fixed": "固定值", "lookup": "CSV 查表"}
 
 
 def csv_header(kind):
     return ("travel_mm", *(column for column, *_ in FIELDS[kind]))
 
 
-def validate_tables(tables):
+def geometry_modes(project):
+    tables = project.get("geometry_tables", {})
+    modes = project.get("geometry_modes", {})
+    return {kind: modes.get(kind, "lookup" if kind in tables else "fixed") for kind in FIELDS}
+
+
+def validate_geometry(project):
+    tables = project.get("geometry_tables", {})
     if not isinstance(tables, dict) or tables.keys() - FIELDS.keys():
         raise ValueError("幾何查表設定格式有誤。")
-    return {kind: validate_rows(kind, rows) for kind, rows in tables.items()}
+    modes = project.get("geometry_modes", {})
+    if not isinstance(modes, dict) or any(kind not in FIELDS or mode not in ("fixed", "lookup")
+                                          for kind, mode in modes.items()):
+        raise ValueError("幾何模式設定格式有誤。")
+    for kind, mode in geometry_modes(project).items():
+        if mode == "lookup" and kind not in tables:
+            raise ValueError(f"請先在「幾何查表」匯入 {TITLES[kind]} CSV。")
+    for kind, rows in tables.items():
+        validate_rows(kind, rows)
 
 
 def validate_rows(kind, rows):
@@ -77,7 +94,10 @@ class GeometryLookup:
     def __init__(self, project):
         self.fixed = project["vehicle"]
         self.curves = {}
+        self.active_kinds = {kind for kind, mode in geometry_modes(project).items() if mode == "lookup"}
         for kind, rows in project.get("geometry_tables", {}).items():
+            if kind not in self.active_kinds:
+                continue
             for index, (_, _, key, axle, units) in enumerate(FIELDS[kind], 1):
                 self.curves[key] = (axle, Curve([(row[0], row[index] / units) for row in rows]))
 

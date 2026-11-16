@@ -1,4 +1,4 @@
-"""Quasi-static load transfer adapted from VehicleLab's rigid and distribution tools."""
+"""Quasi-static lateral load transfer adapted from VehicleLab."""
 
 import math
 
@@ -6,19 +6,8 @@ import numpy as np
 
 from .engine import G, prepare_vehicle
 from .geometry_lookup import GeometryLookup
+from .lateral_tire import LateralTire
 from .project import AERO_DEFAULTS, CORNERS, downforce
-
-
-def rigid_transfer(vehicle, ax_g, ay_g):
-    mass, height = vehicle["m"], vehicle["h_cg"]
-    wheelbase = vehicle["lf"] + vehicle["lr"]
-    weight = mass * G
-    front = weight * vehicle["lr"] / wheelbase
-    longitudinal = -mass * G * ax_g * height / wheelbase
-    axle_loads = np.array([front + longitudinal, weight - front - longitudinal])
-    lateral = axle_loads * ay_g * height / [vehicle["tf"], vehicle["tr"]]
-    static = np.repeat([front / 2, (weight - front) / 2], 2)
-    return static, axle_loads, longitudinal, np.repeat(axle_loads / 2, 2) + wheel_deltas(lateral)
 
 
 def wheel_deltas(lateral):
@@ -64,15 +53,9 @@ class TransferDistribution:
         unit_transfer = G * (self.unsprung_moment_per_ay + self.geometry_moment_per_ay
                              + self.elastic_moment_per_ay * self.stiffness_share) / self.track
         self.lift_limits_g = np.divide(self.static[::2], abs(unit_transfer), out=np.full(2, np.inf), where=unit_transfer != 0.)
-        self.angle_samples = np.linspace(0., .5, 301)
-        b, c, e = (options[key] for key in ("b", "c", "e"))
-        argument = b * self.angle_samples
-        curve = np.sin(c * np.arctan(argument - e * (argument - np.arctan(argument))))
-        peak = np.argmax(curve)
-        self.force_samples = curve[:peak + 1]
-        self.angle_samples = self.angle_samples[:peak + 1]
+        self.tire = LateralTire(options["pressure_f"], options["pressure_r"], options.get("tire_tir"))
 
-    def at(self, ay_g):
+    def load_state(self, ay_g):
         ay = ay_g * G
         speed_kmh = 3.6 * math.sqrt(abs(ay) * self.options["radius"])
         aero = downforce(self.aero, speed_kmh) if self.aero["enabled"] else 0.
@@ -85,38 +68,29 @@ class TransferDistribution:
         lateral = moments / self.track
         baseline = self.static + np.repeat(aero / 2 * self.fractions, 2)
         loads = baseline + wheel_deltas(lateral)
-        demand = self.mass * ay * self.fractions
-        capacity = self.tire_capacity(loads)
-        axle_capacity = capacity.reshape(2, 2).sum(axis=1)
-        axle_baseline = self.tire_capacity(baseline).reshape(2, 2).sum(axis=1)
-        grip = axle_capacity / axle_baseline
-        slips = [self.slip_angle(force, peak) for force, peak in zip(demand, axle_capacity)]
-        lateral_forces = np.zeros(4)
-        for axle, peak in enumerate(axle_capacity):
-            if peak > 0:
-                indices = slice(2 * axle, 2 * axle + 2)
-                lateral_forces[indices] = demand[axle] * capacity[indices] / peak
-        geometric_steer = math.copysign(math.degrees(math.atan(self.wheelbase / self.options["radius"])), ay) if ay else 0.
-        steer = geometric_steer + slips[0] - slips[1] if all(value is not None for value in slips) else None
         return dict(loads=loads, baseline=baseline, paths=paths, lateral=lateral, speed_kmh=speed_kmh,
                     roll=math.degrees(elastic / self.total_roll_stiffness),
                     front_share=abs(lateral[0]) / sum(abs(lateral)) if np.any(lateral) else None,
                     front_moment_share=moments[0] / total_moment if total_moment else None,
-                    moment_error=sum(moments) - total_moment, grip=grip, slips=slips, steer=steer,
-                    forces=lateral_forces, understeer=(steer - geometric_steer) / ay_g if steer is not None and ay_g else None)
+                    moment_error=sum(moments) - total_moment)
 
-    def tire_capacity(self, loads):
-        load = np.maximum(0., loads)
-        o = self.options
-        return o["mu"] * load * np.maximum(.05, 1 - o["sensitivity"] * (load / o["reference_load"] - 1))
-
-    def slip_angle(self, demand, capacity):
-        if demand == 0:
-            return 0.
-        if abs(demand) > capacity * self.force_samples[-1]:
-            return None
-        angle = np.interp(abs(demand) / capacity, self.force_samples, self.angle_samples)
-        return math.copysign(math.degrees(angle), demand)
+    def at(self, ay_g):
+        data = self.load_state(ay_g)
+        demand = self.mass * G * ay_g * self.fractions
+        loads = data["loads"]
+        curves, baseline = self.tire.curves(loads, data["baseline"])
+        grip, slips, forces = [], [], []
+        for axle, target in enumerate(demand):
+            idx = slice(2 * axle, 2 * axle + 2)
+            peak, slip, axle_forces = self.tire.axle_response(curves[idx], target)
+            reference, _, _ = self.tire.axle_response(baseline[idx], target)
+            grip.append(peak / reference if reference > 0. else None)
+            slips.append(slip)
+            forces.extend(axle_forces if axle_forces is not None else [0. if load <= 0. else None for load in loads[idx]])
+        geometric_steer = math.copysign(math.degrees(math.atan(self.wheelbase / self.options["radius"])), ay_g) if ay_g else 0.
+        steer = geometric_steer + slips[0] - slips[1] if all(value is not None for value in slips) else None
+        return dict(data, grip=grip, slips=slips, steer=steer, forces=forces,
+                    understeer=(steer - geometric_steer) / ay_g if steer is not None and ay_g else None)
 
 
 def suspension_roll_stiffness(project):

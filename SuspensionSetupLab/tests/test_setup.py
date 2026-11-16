@@ -7,8 +7,8 @@ import unittest
 import numpy as np
 
 from setup_lab.components import KCSystem
-from setup_lab.engine import Cancelled, G, Vehicle, simulate
-from setup_lab.load_transfer import TransferDistribution, contact_patch, rigid_transfer
+from setup_lab.engine import Cancelled, G, Vehicle, prepare_vehicle, simulate
+from setup_lab.load_transfer import TransferDistribution, contact_patch
 from setup_lab.project import (CORNERS, compile_project, default_project, import_linear, linear, open_project,
                                read_recording, save_project, transfer_options, with_static_tender_travel, with_total_limit_rates)
 from setup_lab.road import Road
@@ -38,17 +38,19 @@ class LoadTransferTests(unittest.TestCase):
                                       .5 * .04 / p["tr"], -.5 * .04 / p["tr"]])
         anti = -p["m"] * 4. * p["h_cg"] / (2 * lookup.wheelbase) * np.array([.2, .2, -.4, -.4])
         np.testing.assert_allclose(change, lookup.travel.T @ (rc + anti), atol=1e-9)
-        np.testing.assert_allclose(TransferDistribution(project, transfer_options("distribution", {})).rc, [.02, .04])
+        np.testing.assert_allclose(TransferDistribution(project, transfer_options({})).rc, [.02, .04])
 
-    def test_rigid_transfer_keeps_signed_loads_and_zeroes_lifted_contact_patch(self):
-        vehicle = default_project()["vehicle"]
-        static, axles, longitudinal, loads = rigid_transfer(vehicle, -1., 3.)
-        expected = vehicle["m"] * G * vehicle["h_cg"] / (vehicle["lf"] + vehicle["lr"])
-        self.assertAlmostEqual(longitudinal, expected)
-        self.assertAlmostEqual(axles[0], sum(static[:2]) + expected)
-        self.assertAlmostEqual(sum(loads), vehicle["m"] * G)
-        self.assertLess(loads[0], 0.)
-        self.assertEqual(contact_patch(loads[0], 80., 180.), (0., 0., 0.))
+        project["vehicle"].update(h_rc_f=.01, h_rc_r=.015)
+        project["geometry_modes"] = {"roll_center": "fixed"}
+        mixed = Vehicle(project, compile_project(project))
+        self.assertEqual(mixed.geometry.active_kinds, {"anti"})
+        self.assertAlmostEqual(mixed.geometry.value("h_rc_f", (10., 10.)), .01)
+        self.assertAlmostEqual(mixed.geometry.value("dive_front", (10., 10.)), .5)
+        np.testing.assert_allclose(TransferDistribution(project, transfer_options({})).rc, [.01, .015])
+
+    def test_contact_patch_has_zero_area_for_a_lifted_tire(self):
+        for load in (-50., 0.):
+            self.assertEqual(contact_patch(load, 80., 180.), (0., 0., 0.))
         area, length, width = contact_patch(800., 80., 180.)
         self.assertAlmostEqual(area, 100.)
         self.assertAlmostEqual(np.pi * length * width / 400, area)
@@ -57,7 +59,7 @@ class LoadTransferTests(unittest.TestCase):
         project = default_project()
         project["channels"]["roll_f"] = linear(100000, 0, 1.)
         project["channels"]["roll_r"] = linear(60000, 0, .8)
-        model = TransferDistribution(project, transfer_options("distribution", {}))
+        model = TransferDistribution(project, transfer_options({}))
         tracks = np.array([project["vehicle"]["tf"], project["vehicle"]["tr"]])
         np.testing.assert_allclose(model.roll_stiffness, [100000 * (tracks[0] / 2)**2, 60000 * (.8 * tracks[1] / 2)**2])
         left, right = model.at(1.), model.at(-1.)
@@ -66,6 +68,45 @@ class LoadTransferTests(unittest.TestCase):
         self.assertAlmostEqual(sum(left["loads"]), project["vehicle"]["m"] * G)
         np.testing.assert_allclose(left["loads"], right["loads"][[1, 0, 3, 2]])
         self.assertAlmostEqual(left["front_share"], left["lateral"][0] / sum(left["lateral"]))
+
+    def test_pacejka_balances_axle_demand_and_uses_each_axle_pressure(self):
+        project = default_project()
+        model = TransferDistribution(project, transfer_options({"pressure_f": 95., "pressure_r": 65.}))
+        left, right = model.at(1.), model.at(-1.)
+        np.testing.assert_allclose(np.sum(np.reshape(left["forces"], (2, 2)), axis=1),
+                                   model.mass * G * model.fractions)
+        np.testing.assert_allclose(left["forces"], -np.asarray(right["forces"])[[1, 0, 3, 2]])
+        np.testing.assert_allclose(left["slips"], -np.asarray(right["slips"]))
+        self.assertGreater(min(left["slips"]), 0.)
+        self.assertAlmostEqual(left["steer"], -right["steer"])
+        self.assertEqual(model.at(0.)["grip"], [1., 1.])
+
+        from Pacejka_tire_model.model import api
+
+        params = api.load_tir("Hoosier_43075_R20_W8_candidate.tir")
+        sides = np.array([1., -1., 1., -1.])
+        conditions = api.CalculationInput(FZ=left["loads"], SA=-sides * np.repeat(left["slips"], 2),
+                                          pressure=[95000., 95000., 65000., 65000.], tir_params=params)
+        expected = sides * api.MF_Universal_solver("FY0", conditions)
+        np.testing.assert_allclose(left["forces"], expected, atol=.5, rtol=0.)
+
+        lower_pressure = TransferDistribution(project, transfer_options({"pressure_f": 65., "pressure_r": 65.})).at(1.)
+        np.testing.assert_allclose(left["loads"], lower_pressure["loads"])
+        self.assertNotAlmostEqual(left["slips"][0], lower_pressure["slips"][0])
+        self.assertAlmostEqual(left["slips"][1], lower_pressure["slips"][1])
+
+    def test_pacejka_reports_no_equilibrium_above_peak_and_zero_force_at_lift(self):
+        project = default_project()
+        project["vehicle"]["h_cg"] = .12
+        saturated = TransferDistribution(project, transfer_options({})).at(3.)
+        self.assertTrue(np.all(saturated["loads"] > 0.))
+        self.assertEqual(saturated["slips"], [None, None])
+        self.assertEqual(saturated["forces"], [None] * 4)
+        self.assertIsNone(saturated["steer"])
+
+        lifted = TransferDistribution(default_project(), transfer_options({})).at(3.)
+        self.assertLess(lifted["loads"][0], 0.)
+        self.assertEqual(lifted["forces"][0], 0.)
 
 
 class ComponentTests(unittest.TestCase):
@@ -333,6 +374,67 @@ class ModelTests(unittest.TestCase):
 
 
 class ReducedModelTests(unittest.TestCase):
+    def test_half_lr_frame_filters_geometry_and_keeps_equilibrium(self):
+        p = default_project()
+        p["model"] = "half_lr"
+        p["case"].update(scenario="cornering", target="all", ay=5., start=.05, ramp=.02, duration=1., dt=.002)
+        self.assertIsNotNone(prepare_vehicle(p)[0].roll_frame)
+        p["roll_center_frame"] = {"enabled": False}
+        instant = simulate(p)
+        p["roll_center_frame"] = {"enabled": True, "stiffness": 50000., "damping": 1500., "mass": 65.}
+        filtered = simulate(p)
+        setting = p["roll_center_frame"]
+        for key in ("stiffness", "damping", "mass"):
+            variant = deepcopy(p)
+            variant["roll_center_frame"][key] *= 1.5
+            changed = simulate(variant)
+            self.assertGreater(np.max(np.abs(changed.signals["Roll Center 傳遞力 [N]"]
+                                             - filtered.signals["Roll Center 傳遞力 [N]"])), .1)
+
+        command = filtered.signals["Roll Center 指令 [N]"]
+        reaction = filtered.signals["Roll Center 傳遞力 [N]"]
+        np.testing.assert_allclose(command, instant.signals["幾何載重轉移量 [N]"])
+        np.testing.assert_allclose(reaction, filtered.signals["幾何載重轉移量 [N]"])
+        self.assertGreater(np.max(np.abs(command - reaction)), 1.)
+        self.assertAlmostEqual(command[-1], reaction[-1], places=3)
+        self.assertEqual(filtered.motion.shape, instant.motion.shape)
+        car, road = prepare_vehicle(p)
+        height, velocity, _, ay = road.at(1.)
+        inputs = height, velocity, 0., ay
+        q = car.equilibrium(inputs)
+        np.testing.assert_allclose(car.forces(q, np.zeros(car.n), inputs), 0., atol=1e-7)
+        self.assertAlmostEqual(q[-1] * setting["stiffness"], command[-1])
+
+    def test_left_right_load_transfer_uses_signed_half_differences_and_actual_sample_times(self):
+        project = default_project()
+        project["model"] = "half_lr"
+        project["geometry_tables"] = {"roll_center": [[-20., 10., 30.], [20., 50., 70.]]}
+        project["tires"]["RL"]["mu"] += 1.
+        project["case"].update(scenario="cornering", target="all", ay=-5., duration=.701, dt=.004, start=.08, ramp=.12)
+        project["model_sources"]["half_lr"] = "rear"
+        result = simulate(project)
+        car, _ = prepare_vehicle(project)
+        ay = result.signals["側向加速度 [m/s²]"]
+        height = result.signals["後 Roll Center [mm]"] / 1000
+        np.testing.assert_allclose(result.signals["Roll Center 指令 [N]"],
+                                   car.total_mass * ay * height / project["vehicle"]["tr"])
+        geometric = result.signals["Roll Center 傳遞力 [N]"]
+        suspension = (result.signals["RR 輪端懸吊力 [N]"] - result.signals["RL 輪端懸吊力 [N]"]) / 2
+        tire = (result.signals["RR [N]"] - result.signals["RL [N]"]) / 2
+        self.assertNotEqual(tire[0], 0.)
+        self.assertNotAlmostEqual(result.time[-1] - result.time[-2], project["case"]["dt"])
+        for label, transfer in (("幾何", geometric), ("懸吊", suspension), ("路徑合計", geometric + suspension), ("輪胎端", tire)):
+            with self.subTest(label=label):
+                np.testing.assert_allclose(result.signals[f"{label}載重轉移量 [N]"], transfer - transfer[0], atol=1e-9)
+                rate = result.signals[f"{label}載重轉移速率 [N/s]"]
+                np.testing.assert_allclose(rate, np.gradient(transfer - transfer[0], result.time), atol=1e-8)
+                i = np.argmax(np.abs(rate))
+                self.assertEqual(result.metrics["load_transfer_rate"][label], (rate[i], result.time[i]))
+        tire_rate = result.signals["輪胎端載重轉移速率 [N/s]"]
+        self.assertLess(tire_rate.min(), -10.)
+        self.assertGreater(tire_rate.max(), 10.)
+        self.assertGreater(np.max(np.abs(result.signals["路徑合計載重轉移速率 [N/s]"] - tire_rate)), 10.)
+
     def test_quarter_projects_heave_and_roll_travel_and_force_by_the_same_ratio(self):
         p = default_project()
         p["model"] = "quarter"
@@ -408,7 +510,7 @@ class ReducedModelTests(unittest.TestCase):
                 p["tires"]["RR"]["mu"] = 20.
                 car = Vehicle(p, compile_project(p))
                 self.assertEqual(car.corners, corners)
-                self.assertEqual(car.n, 2 if model == "quarter" else 4)
+                self.assertEqual(car.n, {"quarter": 2, "half_lr": 5, "half_fr": 4}[model])
                 sprung = (321 - 65) * {"quarter": .2, "half_lr": .4, "half_fr": .5}[model]
                 total = sprung + sum(p["tires"][c]["mu"] for c in corners)
                 zero = np.zeros(len(corners))
@@ -432,15 +534,15 @@ class ReducedModelTests(unittest.TestCase):
         q, v = np.zeros(car.n), np.zeros(car.n)
         zero = np.zeros(car.nw)
         inputs = (zero, zero, 0., 0.)
-        q[car.nb:] = [.001, 0.]
+        q[car.wheels] = [.001, 0.]
         _, _, channels, wheel_force, _ = car.forces(q, v, inputs, True)
         np.testing.assert_allclose(channels[[0, 2], 1], [.4, .5])
         np.testing.assert_allclose(wheel_force, [26., 6.])
-        q[car.nb:] = .001
+        q[car.wheels] = .001
         _, _, channels, wheel_force, _ = car.forces(q, v, inputs, True)
         np.testing.assert_allclose(channels[[0, 2], 1], [.8, 0.])
         np.testing.assert_allclose(wheel_force, [32., 32.])
-        q[car.nb:] = [.001, -.001]
+        q[car.wheels] = [.001, -.001]
         _, _, channels, wheel_force, _ = car.forces(q, v, inputs, True)
         np.testing.assert_allclose(channels[[0, 2], 1], [0., 1.])
         np.testing.assert_allclose(wheel_force, [20., -20.])

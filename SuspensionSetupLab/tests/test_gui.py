@@ -1,3 +1,4 @@
+import csv
 from importlib.util import find_spec
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -8,9 +9,12 @@ from unittest.mock import patch
 
 import numpy as np
 
+from setup_lab.analysis_page import write_csv
 from setup_lab.engine import prepare_vehicle, simulate
+from setup_lab.geometry_lookup import MODES
 from setup_lab.gui import DAMPER_MODES, MR_MODES, SPRINGS, SetupApp
-from setup_lab.project import MODELS, SCENARIOS, compile_project, default_project, open_project, save_project
+from setup_lab.lateral_tire import DEFAULT_TIR
+from setup_lab.project import CORNERS, MODELS, SCENARIOS, compile_project, default_project, open_project, save_project
 from setup_lab.vehicle_3d import FullVehicleView
 
 
@@ -33,6 +37,73 @@ class DesktopTests(unittest.TestCase):
         self.assertIsNone(app.job)
         self.assertIsNotNone(page.result)
 
+    def test_lap_recording_prompts_before_filling_missing_road_columns(self):
+        root, app = self.make_app(default_project())
+        page = app.analysis_pages["full"]
+        original = page.case_input()
+        base = Path(__file__).resolve().parents[1] / ".test-tmp"
+        base.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=base) as folder:
+            path = Path(folder) / "lap_result.csv"
+            path.write_text("distance_m,time_s,phase,ay_m_s2,ax_m_s2,z_fr_mm\n"
+                            "0,0,accelerate,0,0,0\n"
+                            "2,0.2,brake,-3,-2,5\n", encoding="utf-8")
+            with patch("setup_lab.analysis_page.filedialog.askopenfilename", return_value=str(path)), \
+                    patch("setup_lab.analysis_page.messagebox.askyesno", side_effect=[False, True]) as confirm, \
+                    patch.object(app, "error") as error:
+                page.load_recording()
+                self.assertEqual(page.case_input(), original)
+                message = confirm.call_args.args[1]
+                for column in ("z_fl_mm", "z_rl_mm", "z_rr_mm"):
+                    self.assertIn(column, message)
+                for column in ("z_fr_mm", "ax_mps2", "ay_mps2"):
+                    self.assertNotIn(column, message)
+                page.load_recording()
+                case = page.case_input()["case"]
+                self.assertEqual(case["scenario"], "csv")
+                self.assertEqual(case["recording_name"], path.name)
+                self.assertEqual(case["recording"], [[0., 0., 0., 0., 0., 0., 0.], [.2, 0., 5., 0., 0., -2., -3.]])
+                error.assert_not_called()
+
+                path.write_text("distance_m,ax_m_s2,ay_m_s2\n0,0,0\n2,-2,-3\n", encoding="utf-8")
+                page.load_recording()
+                self.assertIn("time_s", str(error.call_args.args[0]))
+                self.assertEqual(confirm.call_count, 2)
+                self.assertEqual(page.case_input()["case"], case)
+
+    def test_pure_calculation_exports_wheel_kinematics_without_setting_playback_result(self):
+        project = default_project()
+        project["case"].update(scenario="combined", target="FL", duration=.22, start=.04, dt=.005)
+        root, app = self.make_app(project)
+        page = app.analysis
+        expected = simulate(app.collect())
+        base = Path(__file__).resolve().parents[1] / ".test-tmp"
+        base.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=base) as folder:
+            path = Path(folder) / "simulation.csv"
+            with patch("setup_lab.gui.filedialog.asksaveasfilename", return_value=str(path)), \
+                    patch.object(page, "set_result") as set_result:
+                page.compute_csv_button.invoke()
+                self.assertTrue(page.compute_csv_button.instate(("disabled",)))
+                deadline = time.monotonic() + 10
+                while app.job is not None and time.monotonic() < deadline:
+                    root.update()
+                    time.sleep(.01)
+                self.assertIsNone(app.job)
+                set_result.assert_not_called()
+            with path.open(encoding="utf-8-sig", newline="") as stream:
+                rows = list(csv.DictReader(stream))
+        self.assertEqual(len(rows), len(expected.time))
+        np.testing.assert_array_equal([float(row["time_s"]) for row in rows], expected.time)
+        for name in ("升沉 [mm]", "前側傾 [deg]", "俯仰 [deg]", "FL 輪端行程 [mm]"):
+            np.testing.assert_allclose([float(row[name]) for row in rows], expected.signals[name], atol=1e-12)
+        for corner in ("FL", "FR", "RL", "RR"):
+            np.testing.assert_allclose([float(row[f"{corner} 輪端位移 [mm]"]) for row in rows],
+                                       expected.signals[f"{corner} [mm]"])
+            np.testing.assert_allclose([float(row[f"{corner} 輪荷 [N]"]) for row in rows], expected.signals[f"{corner} [N]"])
+            for suffix in ("輪端垂直速度 [m/s]", "輪端垂直加速度 [m/s²]", "簧上位移 [mm]"):
+                self.assertTrue(np.isfinite([float(row[f"{corner} {suffix}"]) for row in rows]).all())
+
     def test_aero_page_previews_case_speed_and_saves_reference_point(self):
         root, app = self.make_app(default_project())
         app.analysis.case_vars["speed"].set("20")
@@ -52,26 +123,130 @@ class DesktopTests(unittest.TestCase):
         app.set_project(project, None)
         self.assertEqual(app.aero_page.settings(), project["aero"])
 
-    def test_load_transfer_pages_draw_and_restore_their_settings(self):
+    def test_load_transfer_imports_tir_and_restores_it_without_the_source_file(self):
+        _, app = self.make_app(default_project())
+        page = app.transfer_page
+        page.draw()
+        original = page.contact_model.at(1.)["slips"]
+        self.assertEqual(page.tir_name.get(), DEFAULT_TIR)
+        repo = Path(__file__).resolve().parents[2]
+        fixture = repo / "new" / "Pacejka_tire_model" / "tir" / "FSAE_43075R20_W8.tir"
+        base = repo / "SuspensionSetupLab" / ".test-tmp"
+        base.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=base) as folder:
+            source = Path(folder) / "測試輪胎.tir"
+            source.write_bytes(fixture.read_bytes())
+            with patch("setup_lab.load_transfer_page.filedialog.askopenfilename", return_value=str(source)):
+                page.choose_tir()
+            self.assertEqual(page.tir_name.get(), source.name)
+            updated = page.contact_model.at(1.)["slips"]
+            self.assertNotAlmostEqual(updated[0], original[0])
+            self.assertNotAlmostEqual(updated[1], original[1])
+
+            source.write_text("invalid TIR", encoding="utf-8")
+            with patch("setup_lab.load_transfer_page.filedialog.askopenfilename", return_value=str(source)), \
+                    patch.object(app, "error") as error:
+                page.choose_tir()
+                error.assert_called_once()
+            self.assertEqual(page.contact_model.at(1.)["slips"], updated)
+
+            destination = Path(folder) / "project.json"
+            save_project(destination, app.collect(include_pages=True))
+            source.unlink()
+            app.set_project(*open_project(destination))
+            page.draw()
+            self.assertEqual(page.tir_name.get(), source.name)
+            self.assertEqual(page.contact_model.at(1.)["slips"], updated)
+
+        page.tir_reset.invoke()
+        self.assertEqual(page.tir_name.get(), DEFAULT_TIR)
+        self.assertEqual(page.contact_model.at(1.)["slips"], original)
+        self.assertNotIn("tire_tir", page.options())
+
+    def test_load_transfer_contact_slider_and_legacy_project_settings(self):
         p = default_project()
-        p["load_transfer"] = {"rigid": {"ax": -1.}, "distribution": {"radius": 30.}}
+        p["vehicle"]["h_cg"] = .45
+        p["aero"].update(enabled=True, reference_force_n=100.)
+        p["load_transfer"] = {
+            "rigid": {"ax": -1., "ay": .25, "pressure_f": 95., "pressure_r": 60., "width_f": 175., "width_r": 190.},
+            "distribution": {"radius": 30., "ay": 1.25, "pressure_r": 85., "mu": .01, "b": 1., "e": 0.},
+        }
         root, app = self.make_app(p)
-        for kind, (key, value) in (("rigid", ("ax", -1.)), ("distribution", ("radius", 30.))):
-            page = app.transfer_pages[kind]
-            app.pages.select(page)
-            root.update()
-            app.run()
-            self.assertEqual(len(page.wheels.get_children()), 4)
-            self.assertEqual(page.options()[key], value)
-            self.assertEqual(len(page.charts["輪荷"].spec["series"]), 4)
-        self.assertEqual(len(app.transfer_pages["distribution"].paths.get_children()), 3)
-        self.assertEqual(len(app.transfer_pages["distribution"].charts["三路徑力矩"].spec["series"]), 6)
-        self.assertIsNotNone(app.transfer_pages["rigid"].charts["接地面"].spec)
-        app.transfer_pages["rigid"].fields["ay"].set("1.25")
+        tabs = [app.pages.tab(tab, "text").strip() for tab in app.pages.tabs()]
+        self.assertIn("載重轉移分配", tabs)
+        self.assertNotIn("剛體載重轉移", tabs)
+        page = app.transfer_page
+        app.pages.select(page)
+        page.views.select(page.contact_view)
+        root.geometry("1024x690")
+        root.deiconify()
+        root.update()
+        app.run()
+        chart = page.charts["接地面"]
+        self.assertTrue(chart.winfo_ismapped())
+        self.assertTrue(page.contact_slider.winfo_ismapped())
+        self.assertEqual(len(page.wheels.get_children()), 4)
+        self.assertEqual(len(page.paths.get_children()), 3)
+        self.assertEqual(len(page.charts["三路徑力矩"].spec["series"]), 6)
+        self.assertEqual([series["name"] for series in chart.spec["series"]], list(CORNERS))
+        self.assertEqual(page.contact_ay.get(), 1.25)
+        self.assertEqual(page.options()["radius"], 30.)
+        self.assertEqual(page.options()["pressure_f"], 95.)
+        self.assertEqual(page.options()["pressure_r"], 85.)
+        self.assertEqual(page.options()["width_r"], 190.)
+        self.assertFalse({"mu", "b", "e"} & page.fields.keys())
+        self.assertGreaterEqual(chart.canvas.winfo_width(), 300)
+        self.assertGreaterEqual(chart.canvas.winfo_height(), 220)
+
+        def contact_rows():
+            return {values[0]: [float(value) for value in values[1:]]
+                    for item in page.contact_wheels.get_children()
+                    for values in (page.contact_wheels.item(item, "values"),)}
+
+        original_view = chart.view.copy()
+        page.contact_slider.set(0.)
+        straight = contact_rows()
+        straight_width = np.ptp(chart.spec["series"][1]["y"])
+        self.assertEqual(straight["FL"], straight["FR"])
+        page.contact_slider.set(1.)
+        root.update()
+        left = contact_rows()
+        distribution = page.contact_model.at(1.)
+        for corner, load in zip(CORNERS, distribution["loads"]):
+            self.assertAlmostEqual(left[corner][0], load, delta=.051)
+        self.assertAlmostEqual(left["FR"][1], distribution["loads"][1] / 95. * 10, delta=.051)
+        self.assertGreater(left["FR"][1], straight["FR"][1])
+        self.assertGreater(np.ptp(chart.spec["series"][1]["y"]), straight_width)
+        page.contact_slider.set(-1.)
+        root.update()
+        self.assertEqual(contact_rows()["FL"], left["FR"])
+        self.assertEqual(chart.view, original_view)
+        page.contact_slider.set(3.)
+        self.assertIn("抬輪", page.contact_readout.cget("text"))
+        self.assertEqual(contact_rows()["FL"][1:], [0., 0., 0.])
+        self.assertEqual(chart.spec["series"][0]["marker"], "x")
+
+        page.fields["pressure_f"].set("110")
+        page.fields["ay"].set("1.5")
+        app.run()
+        self.assertEqual(page.contact_ay.get(), 1.5)
+        self.assertAlmostEqual(contact_rows()["FR"][1], page.contact_model.at(1.5)["loads"][1] / 110. * 10, delta=.051)
         snapshot = app.collect(include_pages=True)
-        self.assertEqual(snapshot["load_transfer"]["rigid"]["ay"], 1.25)
-        app.set_project(snapshot, None)
-        self.assertEqual(app.transfer_pages["rigid"].options()["ay"], 1.25)
+        self.assertEqual(set(snapshot["load_transfer"]), {"distribution"})
+        self.assertEqual(snapshot["load_transfer"]["distribution"]["ay"], 1.5)
+        self.assertFalse({"mu", "b", "e"} & snapshot["load_transfer"]["distribution"].keys())
+        base = Path(__file__).resolve().parents[1] / ".test-tmp"
+        base.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=base) as folder:
+            path = Path(folder) / "transfer.json"
+            save_project(path, p)
+            legacy, _ = open_project(path)
+            app.set_project(legacy, None)
+            self.assertEqual(page.options()["pressure_f"], 95.)
+            save_project(path, snapshot)
+            loaded, _ = open_project(path)
+            app.set_project(loaded, None)
+            self.assertEqual(page.options()["pressure_f"], 110.)
 
     def test_geometry_csv_import_is_saved_and_used_by_simulation(self):
         p = default_project()
@@ -79,17 +254,44 @@ class DesktopTests(unittest.TestCase):
         root, app = self.make_app(p)
         page = app.geometry_page
         app.pages.select(page)
+        root.geometry("1024x690")
+        root.deiconify()
         root.update()
+        self.assertNotIn("h_rc_f", app.vehicle_vars)
+        for kind, chart in page.charts.items():
+            self.assertTrue(chart.winfo_ismapped())
+            self.assertGreaterEqual(chart.canvas.winfo_width(), 300)
+            self.assertTrue(page.fixed_forms[kind].winfo_ismapped())
+            self.assertFalse(page.csv_actions[kind].winfo_ismapped())
+        page.fixed_vars["dive_front"].set(".42")
+        self.assertEqual(page.charts["anti"].spec["series"][0]["y"], [42., 42.])
+
+        def select(kind, mode):
+            selector = page.selectors[kind]
+            selector.set(MODES[mode])
+            selector.event_generate("<<ComboboxSelected>>")
+            root.update()
+
         base = Path(__file__).resolve().parents[1] / ".test-tmp"
         base.mkdir(exist_ok=True)
         with TemporaryDirectory(dir=base) as folder:
             path = Path(folder) / "curve.csv"
             with patch("setup_lab.geometry_page.filedialog.askopenfilename", return_value=str(path)), patch.object(app, "error") as error:
+                select("roll_center", "lookup")
+                self.assertTrue(page.csv_actions["roll_center"].winfo_ismapped())
+                self.assertFalse(page.fixed_forms["roll_center"].winfo_ismapped())
+                self.assertTrue(page.fixed_forms["anti"].winfo_ismapped())
+                self.assertIsNone(page.charts["roll_center"].spec)
+                with self.assertRaisesRegex(ValueError, "匯入 Roll Center CSV"):
+                    compile_project(app.collect())
                 path.write_text("travel_mm,front_rc_mm,rear_rc_mm\n-50,5,10\n0,25,30\n50,65,75\n", encoding="utf-8")
                 page.import_table("roll_center")
+                select("anti", "lookup")
                 path.write_text("travel_mm,front_anti_dive_pct,rear_anti_lift_pct,front_anti_lift_pct,rear_anti_squat_pct\n"
                                 "-50,0,0,0,0\n0,15,20,25,30\n50,40,45,50,55\n", encoding="utf-8")
                 page.import_table("anti")
+                self.assertEqual(page.charts["roll_center"].spec["series"][0]["y"], [5., 25., 65.])
+                self.assertEqual(page.charts["anti"].spec["series"][0]["y"], [0., 15., 40.])
                 error.assert_not_called()
                 before = app.collect()
                 path.write_text("travel_mm,front_rc_mm,rear_rc_mm\n0,25,30\n0,65,75\n", encoding="utf-8")
@@ -104,8 +306,27 @@ class DesktopTests(unittest.TestCase):
             for group in ("Roll Center", "Anti"):
                 for name in result.groups[group]:
                     self.assertGreater(np.ptp(result.signals[name]), .01)
-            page.reset_table("anti")
-            self.assertNotIn("anti", app.collect()["geometry_tables"])
+            app.pages.select(page)
+            root.update()
+            select("anti", "fixed")
+            self.assertEqual(page.charts["anti"].spec["series"][0]["y"], [42., 42.])
+            save_project(path, app.collect())
+            fixed, _ = open_project(path)
+            self.assertEqual(fixed["geometry_tables"], before["geometry_tables"])
+            self.assertEqual(fixed["geometry_modes"], {"anti": "fixed"})
+            vehicle, _ = prepare_vehicle(fixed)
+            self.assertAlmostEqual(vehicle.geometry.value("dive_front", (50., 50.)), .42)
+            self.assertAlmostEqual(vehicle.geometry.value("h_rc_f", (50., 50.)), .065)
+            fixed_result = simulate(fixed)
+            self.assertIn("Roll Center", fixed_result.groups)
+            self.assertNotIn("Anti", fixed_result.groups)
+            app.set_project(fixed, None)
+            self.assertEqual(page.selectors["anti"].get(), MODES["fixed"])
+            app.pages.select(page)
+            root.update()
+            select("anti", "lookup")
+            self.assertEqual(page.charts["anti"].spec["series"][0]["y"], [0., 15., 40.])
+            self.assertEqual(app.collect(), before)
 
     def test_csv_force_lookup_import_updates_only_validated_channel_tables(self):
         root, app = self.make_app(default_project())
@@ -329,9 +550,7 @@ class DesktopTests(unittest.TestCase):
         root.update()
         quarter.source_widget.current(3)
         quarter.case_mode()
-        self.assertEqual(app.channel_list.set("heave_r", "state"), "啟用")
-        self.assertEqual(app.channel_list.set("roll_r", "state"), "啟用")
-        self.assertEqual(app.channel_list.set("roll_f", "state"), "不參與")
+        self.assertEqual(app.current_channel, "heave_f")
         self.assertNotIn("quarter_mr", quarter.case_vars)
         quarter.case["quarter_mr"] = .8
         self.assertNotIn(SCENARIOS["maneuver"], quarter.scenario_widget["values"])
@@ -380,6 +599,173 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(app.collect()["case"]["target"], "FR")
         self.assertEqual(app.collect()["model_sources"]["half_fr"], "right")
 
+    def test_component_enable_checkboxes_are_model_specific_and_persist(self):
+        project = default_project()
+        root, app = self.make_app(project)
+        app.pages.select(app.component_page)
+        root.geometry("1024x690")
+        root.deiconify()
+        app.channel_list.selection_set("roll_f")
+        app.select_channel()
+        root.update()
+        checks = app.channel_model_checks
+        self.assertEqual(app.channel_list["columns"], ("channel",))
+        self.assertTrue(all(check.winfo_ismapped() for check in checks.values()))
+        self.assertTrue(checks["half_fr"].instate(("disabled",)))
+        self.assertTrue(checks["quarter"].instate(("selected",)))
+        checks["quarter"].invoke()
+        self.assertFalse(checks["quarter"].instate(("selected",)))
+        self.assertTrue(checks["full"].instate(("selected",)))
+        self.assertTrue(checks["half_lr"].instate(("selected",)))
+
+        quarter = app.analysis_pages["quarter"]
+        app.pages.select(quarter)
+        root.update()
+        quarter.source_widget.current(3)
+        quarter.case_mode()
+        app.pages.select(app.component_page)
+        root.update()
+        self.assertEqual(app.current_channel, "roll_f")
+        self.assertTrue(checks["quarter"].instate(("!disabled", "!selected")))
+        self.assertTrue(checks["full"].instate(("selected",)))
+
+        quarter.source_widget.current(0)
+        quarter.case_mode()
+        snapshot = app.collect(include_pages=True)
+        self.assertEqual(snapshot["channels"]["roll_f"]["enabled_models"], {"quarter": False})
+        base = Path(__file__).resolve().parents[1] / ".test-tmp"
+        base.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=base) as folder:
+            path = Path(folder) / "model-channels.json"
+            save_project(path, snapshot)
+            loaded, _ = open_project(path)
+        app.set_project(loaded, None)
+        app.channel_list.selection_set("roll_f")
+        app.select_channel()
+        self.assertTrue(checks["quarter"].instate(("!selected",)))
+        self.assertTrue(checks["full"].instate(("selected",)))
+        result = simulate(app.collect())
+        self.assertNotIn("前軸側傾", result.groups)
+        self.assertIn("前軸升沉", result.groups)
+        self.assertTrue(any("未計入已停用的通道" in message and "前軸側傾" in message for message in result.warnings))
+        for family in ("full", "half_lr"):
+            car, _ = prepare_vehicle(app.collect(app.analysis_pages[family]))
+            self.assertIn(2, [i for i, _ in car.active])
+
+        app.channel_list.selection_set("FL")
+        app.select_channel()
+        self.assertTrue(checks["half_lr"].instate(("!selected", "!disabled")))
+        checks["half_lr"].invoke()
+        car, _ = prepare_vehicle(app.collect(app.analysis_pages["half_lr"]))
+        self.assertIn(6, [i for i, _ in car.active])
+        car, _ = prepare_vehicle(app.collect(app.analysis_pages["full"]))
+        self.assertNotIn(6, [i for i, _ in car.active])
+
+    def test_front_rear_chart_shows_each_heave_limit_and_tender_crossing(self):
+        project = default_project()
+        project["model"] = "half_fr"
+        project["model_sources"]["half_fr"] = "right"
+        project["case"].update(target="all", duration=.62, start=.08, height=30.)
+        for key, tender, mr in (("heave_f", 2., [[0., .8]]), ("heave_r", 3., [[-20., .6], [20., 1.1]])):
+            project["channels"][key].update(spring_kind="tender", tender_after_static_mm=tender, mr=mr,
+                                            jounce_mm=4., jounce_rate=100., rebound_mm=9., rebound_rate=80.)
+        root, app = self.make_app(project)
+        page = app.analysis
+        root.geometry("1024x690")
+        root.deiconify()
+        app.run()
+        self.finish_job(root, app, page)
+        page.group.set("輪端行程")
+        page.select_group()
+        root.update()
+        result = page.result
+        self.assertEqual(result.corners, ("FR", "RR"))
+        self.assertTrue(page.tender_note.winfo_ismapped())
+        self.assertGreaterEqual(page.chart.canvas.winfo_height(), 220)
+
+        car, road = prepare_vehicle(project)
+        car.equilibrium(road.at(0.))
+        series = page.chart.spec["series"]
+        for (channel, component), corner, wheel_line in zip(car.active, result.corners, series):
+            key, label = (("heave_f", "前軸升沉"), ("heave_r", "後軸升沉"))[channel]
+            reference = result.metrics[corner][3]
+            ratio = component.motion_ratio
+            static_stroke = ratio.integrated(reference)
+            info = result.tender_switches[key]
+            self.assertAlmostEqual(info.wheel_reference_mm, reference)
+            for title, wheel, shaft in (
+                ("壓縮限位", result.wheel_travel_limits[key]["compression"], static_stroke + 4.),
+                ("伸長限位", result.wheel_travel_limits[key]["rebound"], -9.),
+                ("併圈門檻", info.wheel_threshold_mm, component.tender_bind_stroke),
+            ):
+                self.assertAlmostEqual(ratio.integrated(wheel), shaft)
+                line = next(s for s in series if s.get("name", "").startswith(label + title))
+                self.assertEqual(line["y"], [wheel, wheel])
+                self.assertEqual(line["color"], wheel_line["color"])
+            wheel_travel = result.signals[f"{corner} 輪端行程 [mm]"]
+            for times, shape in ((info.binding_times, "+"), (info.release_times, "x")):
+                self.assertEqual(len(times), 1)
+                np.testing.assert_allclose(np.interp(times, result.time, wheel_travel), info.wheel_threshold_mm,
+                                           atol=1e-3)
+                self.assertTrue(any(s.get("marker") == shape and s["x"] == times.tolist() and
+                                    s["color"] == wheel_line["color"] for s in series))
+        self.assertIn("前軸升沉", page.tender_note.cget("text"))
+        self.assertIn("後軸升沉", page.tender_note.cget("text"))
+        page.signal.set("RR 輪端行程 [mm]")
+        page.draw_result()
+        names = [s.get("name", "") for s in page.chart.spec["series"]]
+        self.assertTrue(any(name.startswith("後軸升沉併圈") for name in names))
+        self.assertFalse(any(name.startswith("前軸升沉") for name in names))
+        page.group.set("輪荷")
+        page.select_group()
+        self.assertFalse(page.tender_note.winfo_manager())
+
+    def test_quarter_chart_marks_extrema_for_selected_curves(self):
+        project = default_project()
+        project["model"] = "quarter"
+        project["case"].update(target="FL", duration=.35, start=.05)
+        root, app = self.make_app(project)
+        page = app.analysis
+        root.geometry("1024x690")
+        root.deiconify()
+        page.set_result(simulate(project))
+        page.pin()
+        project["tires"]["FL"]["k"] *= 1.2
+        page.set_result(simulate(project))
+        page.group.set("輪荷")
+        page.select_group()
+        root.update()
+
+        self.assertIsNotNone(page.comparison())
+        curves = page.chart.spec["series"]
+        self.assertEqual([curve["name"] for curve in curves[:2]], ["B FL", "A FL"])
+        for run, markers in ((page.result, curves[2:4]), (page.baseline, curves[4:6])):
+            loads = run.signals["FL [N]"]
+            for marker, index, shape in zip(markers, (np.argmax(loads), np.argmin(loads)), ("triangle_up", "triangle_down")):
+                self.assertEqual((marker["x"], marker["y"]), ([run.time[index]], [loads[index]]))
+                self.assertEqual(marker["marker"], shape)
+        note = page.extrema_note.cget("text")
+        self.assertIn("B FL", note)
+        self.assertIn("A FL", note)
+        self.assertIn("▲ 最大", note)
+        self.assertIn("▼ 最小", note)
+        self.assertIn(f"{page.result.time[np.argmax(page.result.signals['FL [N]'])]:.5f} s", note)
+        self.assertTrue(page.extrema_note.winfo_ismapped())
+        triangles = [coords for kind, coords, *_ in page.chart.primitives if kind == "line" and len(coords) == 8]
+        self.assertEqual(len(triangles), 4)
+
+        page.clear_baseline()
+        page.group.set("空力")
+        page.select_group()
+        page.signal.set("全車下壓力 [N]")
+        page.draw_result()
+        curves = page.chart.spec["series"]
+        self.assertEqual(len(curves), 2)
+        self.assertEqual(curves[1]["marker"], "diamond")
+        self.assertIn("最大＝最小", page.extrema_note.cget("text"))
+        page.set_result(None)
+        self.assertFalse(page.extrema_note.winfo_manager())
+
     def test_full_car_attitude_overlays_pitch_and_roll(self):
         p = default_project()
         p["case"].update(duration=.4, start=.05, target="FL")
@@ -393,12 +779,148 @@ class DesktopTests(unittest.TestCase):
                 self.assertEqual(page.group.get(), "車身姿態")
                 self.assertEqual(page.signal.get(), "全部")
                 self.assertEqual(page.chart.spec["ylabel"], "deg")
+                self.assertNotIn("載重轉移速率", result.groups)
                 series = page.chart.spec["series"]
                 self.assertEqual(tuple(line["name"] for line in series), angles)
                 for line in series:
                     np.testing.assert_allclose(line["x"], result.time)
                     np.testing.assert_allclose(line["y"], result.signals[f"{line['name']} [deg]"])
                     self.assertGreater(np.max(np.abs(line["y"])), 0.)
+
+    def test_left_right_load_transfer_charts_peaks_and_csv(self):
+        project = default_project()
+        project["model"] = "half_lr"
+        project["case"].update(scenario="cornering", target="all", ay=-5., duration=.4, start=.05, ramp=.12)
+        root, app = self.make_app(project)
+        page = app.analysis
+        app.run()
+        self.finish_job(root, app, page)
+        result = page.result
+        page.group.set("載重轉移量")
+        page.select_group()
+        self.assertEqual(page.chart.spec["ylabel"], "N")
+        curves = page.chart.spec["series"]
+        self.assertEqual(len(curves), 8)
+        for name, marker in zip(result.groups["載重轉移量"], curves[4:]):
+            values = result.signals[name]
+            peak = np.argmax(np.abs(values))
+            self.assertLess(values[peak], 0.)
+            self.assertEqual((marker["x"], marker["y"]), ([result.time[peak]], [values[peak]]))
+            self.assertIn(f"{values[peak]:+,.4g} N（{result.time[peak]:.4f} s）", page.extrema_note.cget("text"))
+        page.group.set("載重轉移速率")
+        page.select_group()
+        self.assertEqual(page.signal.get(), "全部")
+        self.assertEqual(page.chart.spec["ylabel"], "N/s")
+        curves = page.chart.spec["series"]
+        self.assertEqual(len(curves), 8)
+        for curve, marker in zip(curves[:4], curves[4:]):
+            rate, time = result.metrics["load_transfer_rate"][curve["name"].removesuffix("載重轉移速率")]
+            self.assertEqual((marker["x"], marker["y"]), ([time], [rate]))
+            self.assertEqual(marker["marker"], "x")
+            self.assertIn(f"{rate:+,.4g} N/s（{time:.4f} s）", page.extrema_note.cget("text"))
+        self.assertIn("載重轉移速率峰值", page.details.get("1.0", "end"))
+        self.assertIn("輪胎端", page.details.get("1.0", "end"))
+
+        base = Path(__file__).resolve().parents[1] / ".test-tmp"
+        base.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=base) as folder:
+            path = Path(folder) / "transfer.csv"
+            write_csv(path, result)
+            with path.open(encoding="utf-8-sig", newline="") as stream:
+                rows = list(csv.DictReader(stream))
+            self.assertEqual(len(rows), len(result.time))
+            for group in ("載重轉移量", "載重轉移速率"):
+                for signal in result.groups[group]:
+                    np.testing.assert_allclose([float(row[signal]) for row in rows], result.signals[signal])
+
+        page.pin()
+        project["vehicle"]["h_rc_f"] *= 2
+        page.set_result(simulate(project))
+        page.signal.set("輪胎端載重轉移速率 [N/s]")
+        page.draw_result()
+        self.assertIn("× B／＋ A", page.extrema_note.cget("text"))
+        self.assertIn("輪胎端峰值", page.extrema_note.cget("text"))
+        self.assertNotIn("幾何峰值", page.extrema_note.cget("text"))
+        self.assertEqual([line["marker"] for line in page.chart.spec["series"][2:]], ["x", "+"])
+        page.group.set("輪荷")
+        page.select_group()
+        self.assertFalse(page.extrema_note.winfo_manager())
+
+    def test_roll_center_scan_compares_21_heights_and_opens_best_run(self):
+        project = default_project()
+        project["model"] = "half_lr"
+        project["model_sources"]["half_lr"] = "rear"
+        project["vehicle"]["h_rc_r"] = .030
+        project["case"].update(scenario="cornering", target="all", ay=-5., duration=.24, start=.03, ramp=.1, dt=.004)
+        root, app = self.make_app(project)
+        page = app.analysis
+        page.scan_button.invoke()
+        self.assertIsNotNone(app.job)
+        self.assertTrue(page.scan_button.instate(("disabled",)))
+        deadline = time.monotonic() + 15
+        while app.job is not None and time.monotonic() < deadline:
+            root.update()
+            time.sleep(.01)
+        self.assertIsNone(app.job)
+        scan = page.scan_result
+        self.assertIsNotNone(scan)
+        self.assertEqual(scan.heights, list(range(20, 41)))
+        self.assertEqual(scan.axle, "rear")
+        self.assertEqual(scan.peaks[scan.best_index], min(scan.peaks))
+        self.assertEqual(scan.peaks[10], abs(simulate(project).metrics["load_transfer_rate"]["輪胎端"][0]))
+        self.assertEqual(scan.best_result.project["vehicle"]["h_rc_f"], project["vehicle"]["h_rc_f"])
+        self.assertEqual(app.collect()["vehicle"]["h_rc_r"], .030)
+        self.assertIn("最低峰值", page.scan_summary.get())
+        self.assertEqual(page.scan_chart.spec["series"][0]["x"], scan.heights)
+        page.scan_best_button.invoke()
+        self.assertIs(page.result, scan.best_result)
+        self.assertEqual(page.signal.get(), "輪胎端載重轉移速率 [N/s]")
+        self.assertEqual(page.outputs.select(), page.plots)
+
+    def test_left_right_frame_form_runs_and_round_trips(self):
+        project = default_project()
+        project["model"] = "half_lr"
+        project["case"].update(scenario="cornering", target="all", ay=5., duration=.35, start=.05, ramp=.12)
+        root, app = self.make_app(project)
+        page = app.analysis
+        app.pages.select(app.vehicle_page)
+        root.geometry("1024x690")
+        root.deiconify()
+        root.update()
+        self.assertTrue(app.roll_frame_enabled.get())
+        for widget in app.roll_frame_widgets.values():
+            self.assertTrue(widget.winfo_ismapped())
+            self.assertTrue(widget.instate(("!disabled",)))
+        app.roll_frame_vars["mass"].set("70")
+        app.pages.select(page)
+        root.update()
+        app.run()
+        self.finish_job(root, app, page)
+        page.group.set("車架傳力")
+        page.select_group()
+        self.assertEqual([line["name"] for line in page.chart.spec["series"]],
+                         ["Roll Center 指令", "Roll Center 傳遞力"])
+        snapshot = app.collect(app.analysis_pages["full"], include_pages=True)
+        self.assertEqual(snapshot["roll_center_frame"]["mass"], 70.)
+        self.assertNotIn("roll_center_frame", snapshot["page_cases"]["half_lr"]["case"])
+        app.set_project(snapshot, None)
+        self.assertTrue(app.roll_frame_enabled.get())
+        self.assertEqual(float(app.roll_frame_vars["mass"].get()), 70.)
+
+        project["case"]["roll_center_frame"] = {"enabled": False, "mass": 80.}
+        app.set_project(project, None)
+        self.assertFalse(app.roll_frame_enabled.get())
+        self.assertTrue(app.roll_frame_widgets["mass"].instate(("disabled",)))
+        migrated = app.collect()
+        self.assertNotIn("roll_center_frame", migrated["case"])
+        self.assertEqual(migrated["roll_center_frame"]["mass"], 80.)
+        self.assertIsNone(prepare_vehicle(migrated)[0].roll_frame)
+
+        legacy = default_project()
+        legacy["page_cases"] = {"half_lr": {"model": "half_lr", "case": project["case"]}}
+        app.set_project(legacy, None)
+        self.assertFalse(app.roll_frame_enabled.get())
+        self.assertEqual(float(app.roll_frame_vars["mass"].get()), 80.)
 
     def test_playback_and_project_round_trip_across_analysis_pages(self):
         p = default_project()

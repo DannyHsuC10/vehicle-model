@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from .components import (KCSystem, MAX_CURVE_POINTS, combined_tender_travel, damper_points, number, points,
                          spring_points, tender_bind_travel)
-from .geometry_lookup import validate_tables
+from .geometry_lookup import validate_geometry
 from .road_profiles import ISO_FREQUENCY_BAND, ISO_ROUGHNESS
 
 
@@ -38,21 +38,16 @@ DEFAULT_TENDER_COMPRESSION_MM = 4.3
 AERO_DEFAULTS = {"enabled": False, "reference_speed_kmh": 100., "reference_force_n": 500.}
 AERO_FIELDS = {"reference_speed_kmh": ("參考車速 (km/h)", .1, 540),
                "reference_force_n": ("參考下壓力 (N)", 0, 1e6)}
-TRANSFER_FIELDS = {
-    "rigid": {
-        "ax": ("縱向加速度 (g)", 0., -3, 3), "ay": ("側向加速度 (g)", 1., -3, 3),
-        "pressure_f": ("前胎壓 (kPa)", 80., 1, 1000), "pressure_r": ("後胎壓 (kPa)", 80., 1, 1000),
-        "width_f": ("前胎寬 (mm)", 180., 1, 1000), "width_r": ("後胎寬 (mm)", 180., 1, 1000),
-    },
-    "distribution": {
-        "ay": ("側向加速度 (g)", 1., -3, 3), "radius": ("彎道半徑 (m)", 20., 2, 5000),
-        "height_f": ("前簧下重心高 (mm)", 230., 0, 2000), "height_r": ("後簧下重心高 (mm)", 230., 0, 2000),
-        "mu": ("輪胎側向摩擦係數", 1.5, .01, 10), "sensitivity": ("輪胎載重敏感係數", .15, 0, 2),
-        "reference_load": ("輪胎參考荷重 (N)", 1000., 1, 1e6),
-        "b": ("Magic Formula B", 8., .01, 100), "c": ("Magic Formula C", 1.3, .01, 10),
-        "e": ("Magic Formula E", -1., -10, 10),
-    },
+TIRE_PRESSURE_FIELDS = {
+    "pressure_f": ("前胎壓 (kPa)", 80., 1, 1000), "pressure_r": ("後胎壓 (kPa)", 80., 1, 1000),
 }
+CONTACT_FIELDS = {
+    "width_f": ("前胎寬 (mm)", 180., 1, 1000), "width_r": ("後胎寬 (mm)", 180., 1, 1000),
+}
+TRANSFER_FIELDS = {
+    "ay": ("側向加速度 (g)", 1., -3, 3), "radius": ("彎道半徑 (m)", 20., 2, 5000),
+    "height_f": ("前簧下重心高 (mm)", 230., 0, 2000), "height_r": ("後簧下重心高 (mm)", 230., 0, 2000),
+} | TIRE_PRESSURE_FIELDS
 TARGET_WHEELS = {**{c: (c,) for c in CORNERS}, "front": CORNERS[:2], "rear": CORNERS[2:],
                  "left": CORNERS[::2], "right": CORNERS[1::2], "all": CORNERS}
 ROAD_HEADER = ("time_s", "z_fl_mm", "z_fr_mm", "z_rl_mm", "z_rr_mm", "ax_mps2", "ay_mps2")
@@ -80,6 +75,11 @@ CASE_FIELDS = {
     "seed": ("路面隨機種子", 0, 2**32 - 1),
     "ax": ("縱向加速度 ax (m/s²)", -100, 100), "ay": ("側向加速度 ay (m/s²)", -100, 100),
     "ramp": ("加速度上升時間 (s)", .002, 120),
+}
+ROLL_FRAME_FIELDS = {
+    "stiffness": ("車架等效剛性 (N/m)", 500000., .01, 1e9),
+    "damping": ("車架等效阻尼 (N·s/m)", 1.4 * (500000. * 65.)**.5, 0., 1e7),
+    "mass": ("車架等效慣性質量 (kg)", 65., .01, 1e5),
 }
 COMPONENT_FIELDS = {
     "installed_mm": "安裝預壓行程 (mm)", "main_rate": "彈簧／主簧剛性 (N/mm)",
@@ -186,6 +186,17 @@ def model_channels(model, corners):
     return (*heave, *roll, *corners)
 
 
+def channel_enabled(settings, family):
+    enabled = settings["enabled"]
+    if type(enabled) is not bool:
+        raise ValueError("元件啟用欄位必須是布林值。")
+    overrides = settings.get("enabled_models", {})
+    if not isinstance(overrides, dict) or any(
+            model not in PAGE_MODELS or type(value) is not bool for model, value in overrides.items()):
+        raise ValueError("依模型啟用的設定有誤。")
+    return overrides.get(family, enabled)
+
+
 def case_axes(scenario, axes, iso_lateral):
     if scenario in MANEUVER_CASES:
         return axes
@@ -242,22 +253,42 @@ def validate_recording(rows):
         raise ValueError("量測 CSV 的時間範圍須小於或等於 120 s。")
 
 
-def read_recording(path):
+def read_recording(path, *, confirm_missing=None):
+    """Read replay columns by name and ask before zero-filling absent signals."""
+    aliases = {"ax_mps2": "ax_m_s2", "ay_mps2": "ay_m_s2"}
     with Path(path).open(encoding="utf-8-sig", newline="") as stream:
-        reader = csv.reader(stream)
-        if tuple(next(reader, ())) != ROAD_HEADER:
-            raise ValueError("CSV 欄名須依序為 " + ",".join(ROAD_HEADER))
+        reader = csv.reader(stream, strict=True)
         rows = []
-        for index, row in enumerate(reader, 2):
-            if not row:
-                continue
-            if len(rows) >= 100001:
-                raise ValueError("量測 CSV 超過 100,001 筆資料。")
-            try:
-                rows.append([float(value) for value in row])
-            except ValueError as exc:
-                raise ValueError(f"CSV 第 {index} 列包含非數值欄位。") from exc
+        try:
+            header = [value.strip().lower() for value in next(reader, ())]
+            columns = {name: index for index, name in enumerate(header)}
+            if "time_s" not in columns:
+                raise ValueError("CSV 缺少時間欄位 time_s（秒）。時間軸無法以 0 補齊。")
+            if len(columns) != len(header):
+                raise ValueError("CSV 有重複的欄名，請確認每個欄名只出現一次。")
+            indices = [columns.get(name, columns.get(aliases.get(name))) for name in ROAD_HEADER]
+            missing = tuple(name for name, index in zip(ROAD_HEADER, indices) if index is None)
+            if missing and confirm_missing is None:
+                raise ValueError("CSV 缺少欄位 " + "、".join(missing))
+            for row in reader:
+                if not row:
+                    continue
+                if len(rows) >= 100001:
+                    raise ValueError("量測 CSV 超過 100,001 筆資料。")
+                if len(row) != len(header):
+                    raise ValueError(f"CSV 第 {reader.line_num} 列的欄數與表頭不同。")
+                values = []
+                for name, index in zip(ROAD_HEADER, indices):
+                    try:
+                        values.append(0. if index is None else float(row[index]))
+                    except ValueError as exc:
+                        raise ValueError(f"CSV 第 {reader.line_num} 列的 {name} 須填入數值。") from exc
+                rows.append(values)
+        except csv.Error as exc:
+            raise ValueError(f"CSV 第 {reader.line_num} 列格式有誤。") from exc
     validate_recording(rows)
+    if missing and not confirm_missing(missing):
+        return None
     return rows
 
 
@@ -307,11 +338,29 @@ def downforce(settings, speed_kmh):
     return settings["reference_force_n"] * (speed_kmh / settings["reference_speed_kmh"]) ** 2
 
 
-def transfer_options(kind, values):
+def transfer_options(values):
     if not isinstance(values, dict):
         raise ValueError("載重轉移設定格式有誤。")
-    return {key: number(values.get(key, default), label, low, high)
-            for key, (label, default, low, high) in TRANSFER_FIELDS[kind].items()}
+    options = {key: number(values.get(key, default), label, low, high)
+               for key, (label, default, low, high) in (TRANSFER_FIELDS | CONTACT_FIELDS).items()}
+    if "tire_tir" in values:
+        source = values["tire_tir"]
+        if (not isinstance(source, dict) or set(source) != {"name", "text"}
+                or not all(isinstance(value, str) and value.strip() for value in source.values())):
+            raise ValueError("載重轉移的 TIR 設定格式有誤。")
+        options["tire_tir"] = source.copy()
+    return options
+
+
+def load_transfer_options(settings):
+    if not isinstance(settings, dict) or settings.keys() - {"distribution", "rigid"}:
+        raise ValueError("載重轉移設定格式有誤。")
+    distribution = settings.get("distribution", {})
+    rigid = settings.get("rigid", {})
+    if not isinstance(distribution, dict) or not isinstance(rigid, dict):
+        raise ValueError("載重轉移設定格式有誤。")
+    contact = {key: rigid[key] for key in TIRE_PRESSURE_FIELDS | CONTACT_FIELDS if key in rigid}
+    return transfer_options(contact | distribution)
 
 
 def compile_project(project):
@@ -339,12 +388,9 @@ def compile_project(project):
         raise ValueError("總質量必須大於四輪簧下質量總和。")
 
     validate_aero(project.get("aero", AERO_DEFAULTS))
-    validate_tables(project.get("geometry_tables", {}))
-    transfer = project.get("load_transfer", {})
-    if not isinstance(transfer, dict) or transfer.keys() - TRANSFER_FIELDS.keys():
-        raise ValueError("載重轉移設定格式有誤。")
-    for kind, values in transfer.items():
-        transfer_options(kind, values)
+    validate_geometry(project)
+    project_roll_frame(project)
+    load_transfer_options(project.get("load_transfer", {}))
     validate_case(model, sources, project["case"])
     for page, setup in analysis_page_cases(project).items():
         if page not in PAGE_MODELS or not isinstance(setup, dict) or setup.get("model") not in PAGE_MODELS[page]:
@@ -354,7 +400,9 @@ def compile_project(project):
     compiled = []
     for key, label in CHANNELS.items():
         try:
-            compiled.append(compile_component(key, project["channels"][key], vehicle, unsprung_mass))
+            settings = project["channels"][key]
+            enabled = channel_enabled(settings, MODEL_PAGE[model])
+            compiled.append(compile_component(key, {**settings, "enabled": enabled}, vehicle, unsprung_mass))
         except (ValueError, KeyError, TypeError) as exc:
             raise ValueError(f"{label}：{exc}") from exc
     return compiled
@@ -384,17 +432,32 @@ def validate_case(model, sources, case):
         limit = .5 / (ISO_FREQUENCY_BAND[1] * case["speed"])
         if case["dt"] >= limit:
             raise ValueError(f"以目前車速取樣 ISO 路面時，輸出間隔須小於 {limit:.6g} s。")
-    duration = case["duration"]
     if case["recording"] or case["scenario"] == "csv":
         validate_recording(case["recording"])
-    if case["scenario"] == "csv":
-        duration = case["recording"][-1][0] - case["recording"][0][0]
-    elif case["start"] >= duration:
+    if case["scenario"] != "csv" and case["start"] >= case["duration"]:
         raise ValueError("輸入開始時間須早於模擬結束時間。")
-    if duration / case["dt"] > 30000:
-        raise ValueError("輸出上限為 30,001 筆，請縮短時間或增加輸出間隔。")
     if not isinstance(case["recording_name"], str):
         raise ValueError("量測檔名格式有誤。")
+
+
+def roll_frame_options(values):
+    if not isinstance(values, dict) or type(values.get("enabled", True)) is not bool:
+        raise ValueError("車架傳力設定格式有誤。")
+    return {"enabled": values.get("enabled", True),
+            **{key: number(values.get(key, default), label, low, high)
+               for key, (label, default, low, high) in ROLL_FRAME_FIELDS.items()}}
+
+
+def project_roll_frame(project):
+    key = "roll_center_frame"
+    if key in project:
+        return roll_frame_options(project[key])
+    if project["model"] == "half_lr" and key in project["case"]:
+        return roll_frame_options(project["case"][key])
+    setup = analysis_page_cases(project).get("half_lr")
+    if isinstance(setup, dict) and isinstance(setup.get("case"), dict):
+        return roll_frame_options(setup["case"].get(key, {}))
+    return roll_frame_options({})
 
 
 def import_linear(source):
