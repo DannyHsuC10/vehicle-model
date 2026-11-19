@@ -1,10 +1,13 @@
 """Interactive orthographic view of the actual solved point and rod geometry."""
 
 from itertools import product
-from math import cos, pi, sin
+from math import cos, hypot, pi, sin
 import tkinter as tk
 
 import numpy as np
+
+from .model import CORNERS
+from .wheel_frame import TireSetup, WheelFrame
 
 
 VIEWS = {
@@ -20,6 +23,8 @@ ROD = "#85b8d5"
 SELECTED = "#ffbc70"
 REFERENCE = "#57768c"
 FONT = "Microsoft JhengHei UI"
+TIRE_ANGLES = np.linspace(0., 2. * pi, 32, endpoint=False)
+TIRE_COLOR = "#658597"
 SUSPENSION_RODS = (
     ("_RACK-TOE", "轉向拉桿", "#84aeff"),
     ("_PUSH_ROD", "推桿", "#e5a9f5"),
@@ -39,7 +44,7 @@ class MechanismViewport(tk.Canvas):
         self.pan = np.zeros(2)
         self.reference_visible = False
         self.labels_visible = False
-        self.selection = (None, None)
+        self.selected_point = self.selected_rod = None
         self._orbit_origin = self._drag_at = self._pan_at = None
         self._orbit_moved = False
         self.bind("<Configure>", self.draw)
@@ -53,13 +58,13 @@ class MechanismViewport(tk.Canvas):
         self.bind("<Button-4>", self._wheel)
         self.bind("<Button-5>", self._wheel)
 
-    def set_model(self, model, positions=None):
+    def set_model(self, model, positions=None, *, tires=None):
         """Set topology and fix camera fitting to the bounds of the entire motion."""
         new_model = self.model is not model
         self.model = model
         if model is None:
             self.position = None
-            self.selection = (None, None)
+            self.selected_point = self.selected_rod = None
             self.draw()
             return
 
@@ -67,8 +72,17 @@ class MechanismViewport(tk.Canvas):
         points = {name: i for i, name in enumerate(model.point_names)}
         self.fixed = np.zeros(len(points), dtype=bool)
         self.fixed[[points[name] for name in model.fixed]] = True
+        self.visible_points = np.array([name not in model.internal_points for name in model.point_names])
         self.members = np.asarray([(points[link.a], points[link.b]) for link in model.links], dtype=int).reshape(-1, 2)
         self.fixed_members = self.fixed[self.members].all(axis=1)
+        self.visible_rods = self.visible_points[self.members].all(axis=1)
+        self.tires = {}
+        for corner in CORNERS:
+            setup = (tires or {}).get(corner, TireSetup())
+            frame = WheelFrame.from_model(model, corner, points, setup)
+            if frame is None:
+                continue
+            self.tires[corner] = (frame, setup.width_mm / 1000., setup.radius_mm / 1000.)
         self.rod_styles = [next((style for style in SUSPENSION_RODS if link.name.endswith(style[0])), None)
                            for link in model.links]
         self.rod_legend = tuple(style for style in SUSPENSION_RODS if style in self.rod_styles)
@@ -77,12 +91,18 @@ class MechanismViewport(tk.Canvas):
         if positions is not None and len(positions):
             low = np.minimum(low, np.min(positions, axis=(0, 1)))
             high = np.maximum(high, np.max(positions, axis=(0, 1)))
+        for frame, width, radius in self.tires.values():
+            center = frame.center
+            extent = hypot(radius, width / 2.)
+            samples = model.reference[None, center] if positions is None else positions[:, center]
+            low = np.minimum(low, np.minimum(model.reference[center], samples.min(axis=0)) - extent)
+            high = np.maximum(high, np.maximum(model.reference[center], samples.max(axis=0)) + extent)
         self.center = (low + high) / 2.
         self.fit_corners = np.array(tuple(product(*zip(low, high))))
         self.span = max((high - low).max(), .001)
         self.grid = self._make_grid(low, high)
         if new_model:
-            self.selection = (None, None)
+            self.selected_point = self.selected_rod = None
             self.reset_camera()
         else:
             self.draw()
@@ -111,9 +131,10 @@ class MechanismViewport(tk.Canvas):
         self.labels_visible = bool(visible)
         self.draw()
 
-    def set_selection(self, kind=None, name=None):
-        self.selection = (kind, name)
-        self.draw()
+    def set_selection(self, point, rod):
+        if (point, rod) != (self.selected_point, self.selected_rod):
+            self.selected_point, self.selected_rod = point, rod
+            self.draw()
 
     def _make_grid(self, low, high):
         half = np.maximum((high - low) / 2., .15 * self.span)
@@ -182,18 +203,36 @@ class MechanismViewport(tk.Canvas):
         if self.model is None:
             return
         items = self.find_overlapping(x - 4, y - 4, x + 4, y + 4)
-        for kind in ("point", "rod"):
-            prefix = kind + ":"
-            for item in reversed(items):
-                tag = next((tag for tag in self.gettags(item) if tag.startswith(prefix)), None)
-                if tag is None:
-                    continue
-                index = int(tag.removeprefix(prefix))
-                name = self.model.point_names[index] if kind == "point" else self.model.links[index].name
-                self.set_selection(kind, name)
-                if self.on_pick is not None:
-                    self.on_pick(kind, name)
-                return
+        hits = []
+        cursor = np.array((x, y))
+        for item in reversed(items):
+            tag = next((tag for tag in self.gettags(item) if tag.startswith(("point:", "rod:"))), None)
+            if tag is None:
+                continue
+            kind, index = tag.split(":")
+            if self.type(item) == "text":
+                priority, distance = 3, 0.
+            else:
+                a, b = np.asarray(self.coords(item)).reshape(2, 2)
+                if kind == "point":
+                    distance = np.linalg.norm(cursor - (a + b) / 2.)
+                    priority = 0 if distance <= (b[0] - a[0]) / 2. + 1 else 2
+                else:
+                    segment = b - a
+                    length_squared = segment @ segment
+                    fraction = np.clip((cursor - a) @ segment / length_squared, 0., 1.) if length_squared else 0.
+                    priority, distance = 1, np.linalg.norm(cursor - a - fraction * segment)
+            hits.append((priority, distance, kind, int(index)))
+        if not hits:
+            return
+        _, _, kind, index = min(hits, key=lambda hit: hit[:2])
+        name = self.model.point_names[index] if kind == "point" else self.model.links[index].name
+        if self.on_pick is not None:
+            self.on_pick(kind, name)
+        elif kind == "point":
+            self.set_selection(name, self.selected_rod)
+        else:
+            self.set_selection(self.selected_point, name)
 
     def _draw_axes(self, camera, width, height):
         x, y = width - 53, height - 53
@@ -209,18 +248,19 @@ class MechanismViewport(tk.Canvas):
 
     def _draw_reference(self, project):
         reference = project(self.model.reference)
-        for a, b in self.members[~self.fixed_members]:
+        for a, b in self.members[~self.fixed_members & self.visible_rods]:
             self.create_line(*reference[[a, b]].ravel(), fill=REFERENCE, dash=(4, 4), width=1.25)
-        for x, y in reference[~self.fixed]:
+        for x, y in reference[~self.fixed & self.visible_points]:
             self.create_oval(x - 3, y - 3, x + 3, y + 3, outline=REFERENCE)
 
     def _draw_rods(self, screen, depth):
         depths = depth[self.members].mean(axis=1)
         order = np.argsort(depths, kind="stable")
+        order = order[self.visible_rods[order]]
         selected_item = None
         for i in order:
             a, b = self.members[i]
-            highlight = self.selection == ("rod", self.model.links[i].name)
+            highlight = self.selected_rod == self.model.links[i].name
             style = self.rod_styles[i]
             color = style[2] if style else FIXED if self.fixed_members[i] else ROD
             width = 3 if style else 2
@@ -235,11 +275,12 @@ class MechanismViewport(tk.Canvas):
 
     def _draw_points(self, screen, depth):
         order = np.argsort(depth, kind="stable")
+        order = order[self.visible_points[order]]
         for i in order:
             x, y = screen[i]
             name = self.model.point_names[i]
             fixed = self.fixed[i]
-            highlight = self.selection == ("point", name)
+            highlight = self.selected_point == name
             radius = 6 if highlight else 4
             color = SELECTED if highlight else FIXED if fixed else MOVING
             tags = (f"point:{i}",)
@@ -248,14 +289,36 @@ class MechanismViewport(tk.Canvas):
                 self.create_rectangle(*bounds, outline=color, fill=BACKGROUND, width=2, tags=tags)
             else:
                 self.create_oval(*bounds, fill=color, outline=BACKGROUND, width=1, tags=tags)
-        for i, (x, y) in enumerate(screen):
+        for i in order:
+            x, y = screen[i]
             name = self.model.point_names[i]
-            highlight = self.selection == ("point", name)
+            highlight = self.selected_point == name
             if not (highlight or self.labels_visible):
                 continue
             color = SELECTED if highlight else "#e2edf5"
             self.create_text(x + 8, y - 7, text=name, anchor="sw", fill=color,
                              font=(FONT, 9), tags=(f"point:{i}",))
+
+    def _draw_tires(self, camera, project):
+        ordered = sorted(self.tires.items(), key=lambda item: self.position[item[1][0].center] @ camera[2])
+        for corner, (frame, width, radius) in ordered:
+            center = self.position[frame.center]
+            normal = frame.normal(self.position)
+            radial = np.cross(normal, np.eye(3)[np.argmin(np.abs(normal))])
+            radial /= np.linalg.norm(radial)
+            ring = radius * (np.cos(TIRE_ANGLES)[:, None] * radial
+                             + np.sin(TIRE_ANGLES)[:, None] * np.cross(normal, radial))
+            back, front = project(center + ring - width / 2 * normal), project(center + ring + width / 2 * normal)
+            if normal @ camera[2] < 0.:
+                back, front = front, back
+            tags = ("tire", f"tire:{corner}")
+            for i in range(len(ring)):
+                j = (i + 1) % len(ring)
+                if (ring[i] + ring[j]) @ camera[2] > 0.:
+                    self.create_polygon(*back[i], *back[j], *front[j], *front[i], fill=TIRE_COLOR,
+                                        stipple="gray50", tags=tags)
+            self.create_polygon(*back.ravel(), fill="", outline=TIRE_COLOR, tags=tags)
+            self.create_polygon(*front.ravel(), fill=TIRE_COLOR, stipple="gray25", outline="#8faebb", tags=tags)
 
     def draw(self, _event=None):
         self.delete("all")
@@ -277,6 +340,7 @@ class MechanismViewport(tk.Canvas):
 
         for segment in project(self.grid):
             self.create_line(*segment.ravel(), fill="#233d50")
+        self._draw_tires(camera, project)
         if self.reference_visible:
             self._draw_reference(project)
 

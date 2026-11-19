@@ -117,10 +117,14 @@ def export_results(directory, result: "MotionResult", ratio: MotionRatio | None 
     directory.mkdir(parents=True, exist_ok=True)
     points = directory / "point_kinematics.csv"
     rods = directory / "rod_kinematics.csv"
+    displacement = getattr(result, "displacement", None)
+    internal_points = set(getattr(result, "internal_points", ()))
+    nodes = [(j, point) for j, point in enumerate(result.point_names) if point not in internal_points]
     _write_csv(points, ("time_s", "point", "x_m", "y_m", "z_m", "vx_m_s", "vy_m_s", "vz_m_s",
-                        "ax_m_s2", "ay_m_s2", "az_m_s2"),
-               ((time, point, *result.position[i, j], *result.velocity[i, j], *result.acceleration[i, j])
-                for i, time in enumerate(result.time) for j, point in enumerate(result.point_names)))
+                        "ax_m_s2", "ay_m_s2", "az_m_s2", "dx_m", "dy_m", "dz_m"),
+               ((time, point, *result.position[i, j], *result.velocity[i, j], *result.acceleration[i, j],
+                 *(displacement[i, j] if displacement is not None else (None, None, None)))
+                for i, time in enumerate(result.time) for j, point in nodes))
     _write_csv(rods, ("time_s", "rod", "azimuth_deg", "elevation_deg", "angle_from_reference_deg",
                       "omega_x_rad_s", "omega_y_rad_s", "omega_z_rad_s",
                       "alpha_x_rad_s2", "alpha_y_rad_s2", "alpha_z_rad_s2"),

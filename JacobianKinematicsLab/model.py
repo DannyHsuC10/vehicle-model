@@ -72,6 +72,8 @@ class Model:
     samples: int = 121
     attachments: tuple[Attachment, ...] = ()
     reference_settings: ReferenceSettings | None = None
+    internal_points: tuple[str, ...] = ()
+    standard_suspension: bool = False
 
 
 @dataclass(frozen=True)
@@ -126,11 +128,12 @@ def read_hardpoints(path):
     return result
 
 
-def _model(name, points, fixed, links, drives, duration=2., samples=121, *, attachments=(), reference_settings=None):
+def _model(name, points, fixed, links, drives, duration=2., samples=121, *, attachments=(),
+           reference_settings=None, internal_points=(), standard_suspension=False):
     reference = np.array(list(points.values()), dtype=float)
     reference.setflags(write=False)
     return Model(name, tuple(points), reference, tuple(fixed), tuple(links), tuple(drives), duration, samples,
-                 tuple(attachments), reference_settings)
+                 tuple(attachments), reference_settings, tuple(internal_points), standard_suspension)
 
 
 def _upright(corner, local, points, links, drives, attachments):
@@ -238,6 +241,7 @@ def _suspension_model(points, name, reference_settings=None):
             raise ValueError(f"硬點 {qualified} 有重複定義。")
         canonical[qualified] = xyz
 
+    imported = set(canonical)
     fixed, links, drives, attachments = [], [], [], []
     bump = reference_settings.bump_mm if reference_settings else 25.
     for corner in CORNERS:
@@ -265,7 +269,8 @@ def _suspension_model(points, name, reference_settings=None):
     _front_rack(canonical, links, drives)
     samples = reference_settings.samples if reference_settings else 121
     return _model(name, canonical, fixed, links, drives, samples=samples, attachments=attachments,
-                  reference_settings=reference_settings)
+                  reference_settings=reference_settings,
+                  internal_points=(name for name in canonical if name not in imported), standard_suspension=True)
 
 
 def _mapping(value, allowed, required, label):
@@ -336,8 +341,12 @@ def _read_reference_settings():
 
 def _read_mechanism(points, path):
     with Path(path).open(encoding="utf-8-sig") as handle:
-        data = _mapping(json.load(handle), ("schema_version", "name", "fixed", "links", "drives", "attachments",
-                                           "duration_s", "samples"), ("fixed", "links", "drives"), "機構")
+        data = json.load(handle)
+    if isinstance(data, dict) and {"vehicle", "front", "rear"} <= data.keys():
+        raise ValueError("此檔案是基準車輛參數 JSON。請用「懸吊範例」載入基準硬點 CSV，"
+                         "或用「自訂機構範例」載入配對的機構 JSON 與硬點 CSV。")
+    data = _mapping(data, ("schema_version", "name", "fixed", "links", "drives", "attachments",
+                           "duration_s", "samples"), ("fixed", "links", "drives"), "機構")
     if type(data.get("schema_version", 1)) is not int or data.get("schema_version", 1) != 1:
         raise ValueError("機構 JSON 需要 schema_version 1。")
     name = _name(data.get("name", Path(path).stem), "機構")
@@ -389,11 +398,12 @@ def _read_mechanism(points, path):
     return _model(name, points, fixed, links, drives, duration, samples, attachments=attachments)
 
 
-def load_model(hardpoints_path, mechanism_path=None):
+def load_model(hardpoints_path, mechanism_path=None, *, points=None):
     """Load spatial hardpoints and an optional explicit mechanism definition."""
     try:
         path = Path(hardpoints_path)
-        points = read_hardpoints(path)
+        if points is None:
+            points = read_hardpoints(path)
         if mechanism_path is not None:
             return _read_mechanism(points, mechanism_path)
         settings = _read_reference_settings() if path.resolve() == EXAMPLES / "hardpoints.csv" else None

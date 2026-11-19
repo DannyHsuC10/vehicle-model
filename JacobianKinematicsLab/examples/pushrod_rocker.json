@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "name": "推桿與搖臂範例",
+  "fixed": ["CHASSIS_A", "CHASSIS_B"],
+  "links": [
+    {"name": "ROCKER_AXIS", "a": "CHASSIS_A", "b": "CHASSIS_B"},
+    {"name": "ROCKER_ARM_A", "a": "CHASSIS_A", "b": "ROCKER_TIP"},
+    {"name": "ROCKER_ARM_B", "a": "CHASSIS_B", "b": "ROCKER_TIP"},
+    {"name": "PUSH_ROD", "a": "PUSHROD_SLIDER", "b": "ROCKER_TIP"}
+  ],
+  "drives": [
+    {"name": "SLIDER_X_GUIDE", "point": "PUSHROD_SLIDER", "direction": [1, 0, 0], "locked": true},
+    {"name": "SLIDER_Y_GUIDE", "point": "PUSHROD_SLIDER", "direction": [0, 1, 0], "locked": true},
+    {"name": "SLIDER_Z", "point": "PUSHROD_SLIDER", "direction": [0, 0, 1], "amplitude_mm": 20, "profile": "pulse"}
+  ],
+  "duration_s": 2,
+  "samples": 41
+}

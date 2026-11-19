@@ -6,7 +6,9 @@ import unittest
 
 import numpy as np
 
+from JacobianKinematicsLab.model import Drive, Model, Motion
 from JacobianKinematicsLab.results import export_results, motion_ratio
+from JacobianKinematicsLab.solver import solve
 
 
 def kinematic_history():
@@ -28,6 +30,24 @@ def kinematic_history():
 
 
 class ResultTests(unittest.TestCase):
+    def test_node_displacement_and_export_use_the_static_reference(self):
+        reference = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+        drives = tuple(Drive(axis, "moving", tuple(direction)) for axis, direction in zip("xyz", np.eye(3)))
+        model = Model("fixture", ("moving", "fixed"), reference, ("fixed",), (), drives)
+        travel = np.array([[0.03, -0.02, 0.04], [-0.05, 0.01, 0.02]])
+        zeros = np.zeros_like(travel)
+        result = solve(model, Motion(np.array([0.0, 0.5]), travel, zeros, zeros))
+
+        np.testing.assert_allclose(result.position[:, 0], reference[0] + travel)
+        np.testing.assert_allclose(result.displacement[:, 0], travel)
+        np.testing.assert_array_equal(result.displacement[:, 1], 0.)
+        with TemporaryDirectory() as temp_dir:
+            points, _ = export_results(temp_dir, result)
+            with points.open(encoding="utf-8-sig", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+        np.testing.assert_allclose([[float(row[f"d{axis}_m"]) for axis in "xyz"] for row in rows[::2]], travel)
+        self.assertEqual(float(rows[0]["x_m"]), 1.03)
+
     def test_selected_drive_preserves_ratio_at_rest(self):
         result = kinematic_history()
         path = motion_ratio(result, "in", "out")

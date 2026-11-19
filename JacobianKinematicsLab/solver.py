@@ -9,9 +9,16 @@ import numpy as np
 class Unreachable(ValueError):
     """The geometry or the requested motion cannot be solved on its current branch."""
 
+    def __init__(self, reason, *, sample=None, time=None):
+        self.reason = reason
+        self.sample = sample
+        super().__init__(reason if time is None else f"t = {time:.6g} s：{reason}")
+
 
 @dataclass(frozen=True)
 class MotionResult:
+    """Kinematic history with node displacement relative to model.reference (m)."""
+
     point_names: tuple[str, ...]
     link_names: tuple[str, ...]
     drive_names: tuple[str, ...]
@@ -26,6 +33,8 @@ class MotionResult:
     angular_acceleration: np.ndarray
     condition: np.ndarray
     sensitivity: np.ndarray
+    displacement: np.ndarray | None = None
+    internal_points: tuple[str, ...] = ()
 
 
 _RANK_TOLERANCE = 1e-7
@@ -313,9 +322,9 @@ def solve(model, motion):
                     mechanism.state(coordinates, target, drive_velocity[index], drive_acceleration[index])
                 )
         except FloatingPointError as error:
-            raise Unreachable(f"t = {sample_time:.6g} s：輸入或運動超出可計算範圍。") from error
+            raise Unreachable("輸入或運動超出可計算範圍。", sample=index, time=sample_time) from error
         except (Unreachable, np.linalg.LinAlgError) as error:
-            raise Unreachable(f"t = {sample_time:.6g} s：{error}") from error
+            raise Unreachable(str(error), sample=index, time=sample_time) from error
         previous_drive = target
 
     try:
@@ -327,4 +336,4 @@ def solve(model, motion):
     return MotionResult(tuple(model.point_names), tuple(link.name for link in model.links),
                         tuple(drive.name for drive in model.drives), time.copy(),
                         position, velocity, acceleration, azimuth, elevation, angle, omega, alpha, condition,
-                        sensitivity)
+                        sensitivity, displacement=displacement, internal_points=getattr(model, "internal_points", ()))
