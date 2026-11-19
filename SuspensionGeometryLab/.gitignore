@@ -1,9 +1,0 @@
-__pycache__/
-*.py[cod]
-*.log
-.venv/
-build/
-dist/
-*.spec
-.test-output/
-.test-tmp/

@@ -12,7 +12,7 @@ def main():
     output=ROOT/"examples";output.mkdir(exist_ok=True)
     app=App();app.busy=True;app.update()
     try:
-        for key in ("step","geometry","lap"):
+        for key in ("geometry","lap"):
             panel=app.panels[key];app.notebook.select(panel)
             result=run_tool(key,app.vehicle,app.geo,defaults(key),app.track)
             panel.result_vehicle=app.vehicle;panel.result_options=defaults(key)

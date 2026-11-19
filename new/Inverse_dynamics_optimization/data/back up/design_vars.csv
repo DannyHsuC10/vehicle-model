@@ -1,0 +1,4 @@
+name,axis,lower,upper,initial
+tie_rod,x,33.65,93.65,78.65
+tie_rod,y,522.44,582.44,552.44
+tie_rod,z,179.52,219.52,179.52

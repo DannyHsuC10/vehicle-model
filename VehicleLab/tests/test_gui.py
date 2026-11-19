@@ -8,7 +8,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 from dataclasses import replace
-from vehicle_lab.workflows import NAMES,defaults,run_tool
+from vehicle_lab.models import read_project,write_project
+from vehicle_lab.workflows import defaults,run_tool
 
 
 @unittest.skipUnless(os.environ.get("VEHICLE_LAB_GUI_TEST")=="1","Opt-in native window test")
@@ -201,7 +202,25 @@ class GuiTests(unittest.TestCase):
             self.assertIs(panel.result_vehicle,app.vehicle)
         finally:app.destroy()
 
-    def test_nine_panels_render_and_export(self):
+    def test_legacy_project_preserves_cli_settings(self):
+        from vehicle_lab.gui import App
+        app=App();app.busy=True;app.update()
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                source=Path(directory)/"legacy.json";saved=Path(directory)/"saved.json"
+                legacy={"step":{"step_mm":30},"damper":{"end":.4},
+                        "distribution":{"radius":28},"rigid":{"ax_g":.8}}
+                write_project(source,app.vehicle,app.geo,{**legacy,"aero":{"speed_kmh":90}})
+                with patch.object(app,"project_file_dialog",side_effect=[str(source),str(saved)]), \
+                     patch("vehicle_lab.gui.messagebox.showerror") as show_error:
+                    app.load();app.save()
+                    show_error.assert_not_called()
+                _,_,settings=read_project(saved)
+                self.assertEqual(settings["aero"]["speed_kmh"],90)
+                self.assertEqual({key:settings[key] for key in legacy},legacy)
+        finally:app.destroy()
+
+    def test_five_panels_render_and_export(self):
         from vehicle_lab.gui import App,VehicleEditor,GeometryEditor,RateEditor,TrackEditor
         app=App()
         errors=[]
@@ -209,9 +228,12 @@ class GuiTests(unittest.TestCase):
         app.busy=True  # Prevent automatic workers; these tests deliver results explicitly.
         app.update()
         try:
+            tabs=[app.notebook.tab(tab,"text") for tab in app.notebook.tabs()]
+            self.assertEqual(tabs,["懸吊幾何","轉向","側傾","空氣力學","圈速"])
+            self.assertIs(app.active(),app.panels["geometry"])
             with tempfile.TemporaryDirectory() as directory:
-                for key in NAMES:
-                    panel=app.panels[key];app.notebook.select(panel)
+                for key,panel in app.panels.items():
+                    app.notebook.select(panel)
                     options=defaults(key);result=run_tool(key,app.vehicle,app.geo,options,app.track)
                     panel.result_vehicle=app.vehicle;panel.result_options=options
                     panel.receive(app.revision,result,None);app.busy=True
@@ -220,7 +242,7 @@ class GuiTests(unittest.TestCase):
                         panel.plot_select.current(index);panel.show_plot();app.update()
                         svg=panel.chart.svg()
                         self.assertIn("<svg",svg);self.assertGreater(len(svg),1000)
-                    if key in ("step","geometry","lap"):
+                    if key in ("geometry","lap"):
                         panel.plot_select.current(0);panel.show_plot();app.update()
                         panel.chart.png(Path(directory)/(key+".png"))
                         self.assertGreater((Path(directory)/(key+".png")).stat().st_size,1000)

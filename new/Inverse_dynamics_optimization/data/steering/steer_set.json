@@ -1,0 +1,135 @@
+{
+  "simulation": {
+    "SIM_TIME": 20.0,
+    "DT": 0.05,
+    "enable_visual": true
+  },
+  "files": {
+    "nodes_path": "data/nodes.csv",
+    "rods_path": "data/rods.csv"
+  },
+  "geometry_override": {
+    "enable": false,
+    "nodes": {
+      "tie_rod": [
+        25,
+        -15,
+        12.5
+      ]
+    }
+  },
+  "inputs": [
+    {
+      "name": "steering",
+      "node": "rack",
+      "constraint": "PositionConstraint",
+      "axis_nodes": [
+        "rack_r",
+        "rack_l"
+      ],
+      "motion": {
+        "motion_type": "s",
+        "input_type": "l",
+        "x_max": 40.0,
+        "x_min": -40.0,
+        "times": 1
+      },
+      "enable": true
+    },
+    {
+      "name": "suspension",
+      "node": "lf_arm",
+      "constraint": "PositionConstraint",
+      "axis_nodes": [
+        "lf_arm1fix",
+        "lf_arm2fix"
+      ],
+      "motion": {
+        "motion_type": "f",
+        "input_type": "l",
+        "x_max": 25.0,
+        "x_min": -25.0,
+        "times": 4,
+        "normal_vector": [
+          0,
+          0,
+          1
+        ]
+      },
+      "enable": false
+    }
+  ],
+  "forces": [
+    {
+      "name": "rack_force",
+      "node": "rack",
+      "axis_nodes": [
+        "rack_r",
+        "rack_l"
+      ],
+      "force": 1600.0
+    }
+  ],
+  "torques": [
+    {
+      "name": "wheel_torque",
+      "node": "tie_rod",
+      "axis_nodes": [
+        "lf_arm",
+        "uf_arm"
+      ],
+      "torque": 0.0
+    }
+  ],
+  "targets": {
+    "node_targets": [
+      "rack",
+      "tie_rod",
+      "uf_arm"
+    ],
+    "rod_targets": [
+      "w",
+      "uAtie"
+    ]
+  },
+  "output": {
+    "plot": [
+      "rack_y",
+      "tau",
+      "tie_rod_f",
+      "tie_rod_fy",
+      "tie_rod_fx"
+    ],
+    "save_plot": true,
+    "print": [],
+    "save_csv": true
+  },
+  "static": {
+    "files": {
+      "nodes_path": "data/nodes.csv",
+      "rods_path": "data/rods.csv"
+    },
+    "forces": [
+      {
+        "node": "lf_arm",
+        "value": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "node": "rack",
+        "value": [
+          0.0,
+          0.0,
+          -950.0
+        ]
+      }
+    ],
+    "output": {
+      "report": true,
+      "csv": true
+    }
+  }
+}

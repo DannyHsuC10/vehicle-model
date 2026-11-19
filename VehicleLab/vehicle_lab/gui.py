@@ -22,6 +22,9 @@ from .lap import PRESETS, read_track, track_from_centerline, sensitivities
 from .motor import read_motor_curve
 
 
+DESKTOP_TOOLS=("geometry","steering","roll","aero","lap")
+
+
 LABELS={
     "name":"車輛名稱", "curb_mass":"整備質量（含電池）kg", "occupants":"駕駛與裝備 kg",
     "wheelbase":"軸距 m", "track_front":"前輪距 m", "track_rear":"後輪距 m", "cg_height":"總車重心高 m",
@@ -352,27 +355,17 @@ class ToolPanel(ttk.Frame):
         self.inputs=inputs.content
         ttk.Label(self.inputs,text=NAMES[key],font=("Microsoft JhengHei UI",15,"bold"),padding=(12,12)).pack(anchor="w")
         for name,label,default,lo,hi in FIELDS[key]:self.field(name,label,default)
-        if key in ("steering","roll","distribution","lap"):
+        if key in ("steering","roll","lap"):
             self.check("use_geometry","從幾何讀取側傾中心",True)
             self.field("rc_front_mm","手動前 RC mm",40);self.field("rc_rear_mm","手動後 RC mm",50)
-        if key in ("roll","distribution","lap"):self.check("aero_on","啟用共用車身空力",key=="lap")
+        if key in ("roll","lap"):self.check("aero_on","啟用共用車身空力",key=="lap")
         if key=="roll":self.check("anti_on","使用幾何 roll axis",True)
-        if key=="damper":
-            self.check("overlay","疊加 B 後軸",True)
-            ttk.Button(self.inputs,text="從階躍阻尼載入 A/B",command=self.load_dampers).pack(fill="x",padx=12,pady=5)
-            ttk.Button(self.inputs,text="將高速係數寫回車輛",command=self.apply_dampers).pack(fill="x",padx=12,pady=5)
-        if key=="step":
-            ttk.Button(self.inputs,text="頻率 / 彈簧 / 前後同步",command=app.open_rate_editor).pack(fill="x",padx=12,pady=5)
-            ttk.Button(self.inputs,text="回彈阻尼設為壓縮阻尼",command=self.match_damping).pack(fill="x",padx=12,pady=5)
-            ttk.Button(self.inputs,text="傳送至阻尼曲線",command=self.send_damping).pack(fill="x",padx=12,pady=5)
         if key in ("geometry","steering","roll"):
             ttk.Button(self.inputs,text="編輯懸吊 / 轉向硬點",command=app.open_geometry_editor).pack(fill="x",padx=12,pady=6)
         if key=="geometry":
             ttk.Button(self.inputs,text="反求 RC / 幾何 anti 目標",command=self.geometry_goals).pack(fill="x",padx=12,pady=5)
         if key=="steering":
             ttk.Button(self.inputs,text="設定 scrub / trail 目標",command=self.kingpin_goals).pack(fill="x",padx=12,pady=5)
-        if key=="distribution":
-            ttk.Button(self.inputs,text="調整防傾桿至中性平衡",command=self.optimize_balance).pack(fill="x",padx=12,pady=5)
         if key=="aero":
             self.check("estimate","估算翼 Cl / Cd",True)
             ttk.Button(self.inputs,text="高度 / 溫度換算空氣密度",command=self.density_helper).pack(fill="x",padx=12,pady=5)
@@ -401,7 +394,7 @@ class ToolPanel(ttk.Frame):
         ttk.Button(controls,text="重設視野",command=lambda:self.chart.reset()).pack(side="left",padx=8)
         self.playing=False;self.animation_after=None
         self.play_button=ttk.Button(controls,text="播放",command=self.toggle_animation)
-        if key in ("step","geometry","steering","roll","lap"):self.play_button.pack(side="left",padx=2)
+        if key in ("geometry","steering","roll","lap"):self.play_button.pack(side="left",padx=2)
         self.body_motion=tk.BooleanVar(value=False)
         if key in ("geometry","steering","roll"):
             features=ttk.Frame(graph,padding=(5,0,5,5));features.pack(fill="x")
@@ -636,51 +629,6 @@ class ToolPanel(ttk.Frame):
             self.app.invalidate();self.calculate()
         except ValueError as exc:messagebox.showerror("設定失敗",str(exc),parent=self.app)
 
-    def optimize_balance(self):
-        try:
-            o=self.options();v=self.app.vehicle;rf,rr=rc_values(v,self.app.geo,o)
-            ay=o["ay_g"]
-            if abs(ay)<.01:raise ValueError("請先設定非零橫向 g")
-            total=v.arb_front+v.arb_rear
-            if total<=0:raise ValueError("至少需要非零的防傾桿總剛性")
-            best=None
-            for i in range(61):
-                vv=replace(v,arb_front=total*i/60,arb_rear=total*(1-i/60))
-                balance=physics.steady_balance(vv,ay,o["radius"],rf,rr,math.sqrt(abs(ay)*9.80665*o["radius"]),o.get("aero_on",False))
-                value=balance["understeer_deg_g"]
-                if value is not None and (best is None or abs(value)<best[0]):best=(abs(value),vv,value)
-            if best is None:raise ValueError("所有候選均已飽和，請降低橫向 g")
-            self.app.vehicle=best[1];self.app.invalidate();self.calculate()
-            self.app.status.set(f"總防傾桿剛性保持不變；最佳可達不足轉向梯度 {best[2]:.4f} deg/g")
-        except ValueError as exc:messagebox.showerror("平衡調整失敗",str(exc),parent=self.app)
-
-    def load_dampers(self):
-        v=self.app.vehicle
-        for front,prefix in ((True,""),(False,"b_")):
-            a="front" if front else "rear";ratio=v.ratio(front)**2
-            for name,attr in (("c","damping_comp_"),("r","damping_reb_")):
-                high=getattr(v,attr+a)*ratio
-                for suffix,value in (("_high",high),("_low",5*high),("_knee",.05)):
-                    self.vars[prefix+name+suffix].set(str(value))
-        self.vars["end"].set("0.4");self.vars["overlay"].set(True)
-
-    def apply_dampers(self):
-        try:
-            o=self.options();v=copy.deepcopy(self.app.vehicle)
-            for front,prefix in ((True,""),(False,"b_")):
-                a="front" if front else "rear"
-                setattr(v,"damping_comp_"+a,o[prefix+"c_high"]/v.ratio(front)**2)
-                setattr(v,"damping_reb_"+a,o[prefix+"r_high"]/v.ratio(front)**2)
-            v.validate();self.app.vehicle=v;self.app.invalidate()
-        except ValueError as exc:messagebox.showerror("錯誤",str(exc),parent=self.app)
-
-    def match_damping(self):
-        v=self.app.vehicle;v.damping_reb_front=v.damping_comp_front;v.damping_reb_rear=v.damping_comp_rear
-        self.app.invalidate();self.calculate()
-
-    def send_damping(self):
-        panel=self.app.panels["damper"];panel.load_dampers();self.app.notebook.select(panel);panel.calculate()
-
     def density_helper(self):
         altitude=simpledialog.askfloat("空氣密度","海拔 m",initialvalue=0,parent=self.app)
         if altitude is None:return
@@ -734,6 +682,7 @@ class App(tk.Tk):
         self.vehicle=Vehicle();self.geo=geom.default_geometry(self.vehicle)
         self.track_name="示範 Autocross";self.track=copy.deepcopy(PRESETS[self.track_name])
         self.revision=0;self.busy=False;self.events=queue.Queue();self.project_path=None
+        self.cli_settings={}
         self._dialogs={};self._project_dialog_active=False
         style=ttk.Style(self);style.theme_use("clam")
         style.configure(".",font=("Microsoft JhengHei UI",10),background="#f1f5f9")
@@ -751,14 +700,14 @@ class App(tk.Tk):
         self.profile=ttk.Label(self,padding=(18,0,18,10),foreground="#475569");self.profile.pack(fill="x")
         self.notebook=ttk.Notebook(self);self.notebook.pack(fill="both",expand=True,padx=12)
         self.panels={}
-        for key,name in NAMES.items():
-            panel=ToolPanel(self,key);self.panels[key]=panel;self.notebook.add(panel,text=name)
+        for key in DESKTOP_TOOLS:
+            panel=ToolPanel(self,key);self.panels[key]=panel;self.notebook.add(panel,text=NAMES[key])
         self.status=tk.StringVar(value="所有計算在本機執行；不傳送車輛資料。")
         ttk.Label(self,textvariable=self.status,padding=(18,10),foreground="#475569").pack(fill="x")
         self.notebook.bind("<<NotebookTabChanged>>",self.tab_changed)
         self.bind("<F5>",lambda event:self.active().calculate())
         self.bind("<Control-s>",lambda event:self.save());self.bind("<Control-o>",lambda event:self.load())
-        self.refresh_profile();self.after(100,self.poll);self.after(150,self.panels["step"].calculate)
+        self.refresh_profile();self.after(100,self.poll)
 
     def active(self):return self.nametowidget(self.notebook.select())
 
@@ -815,7 +764,7 @@ class App(tk.Tk):
         path=self.project_file_dialog(True)
         if not path:return
         try:
-            settings={key:panel.options() for key,panel in self.panels.items()}
+            settings={**self.cli_settings,**{key:panel.options() for key,panel in self.panels.items()}}
             settings.update(track=self.track,track_name=self.track_name)
             write_project(path,self.vehicle,self.geo,settings);self.project_path=path;self.status.set("已儲存專案 "+path)
         except (ValueError,OSError) as exc:messagebox.showerror("儲存失敗",str(exc),parent=self)
@@ -829,7 +778,8 @@ class App(tk.Tk):
             from .lap import validate_track
             track=settings.get("track",self.track);validate_track(track)
             from .workflows import validate_options
-            for key in NAMES:validate_options(key,{**defaults(key),**settings.get(key,{})})
+            for key in self.panels:validate_options(key,{**defaults(key),**settings.get(key,{})})
+            self.cli_settings={key:settings[key] for key in NAMES if key not in self.panels and key in settings}
             self.vehicle=vehicle;self.geo=geo;self.track=track;self.track_name=settings.get("track_name","自訂賽道")
             for key,panel in self.panels.items():
                 for name,value in settings.get(key,{}).items():

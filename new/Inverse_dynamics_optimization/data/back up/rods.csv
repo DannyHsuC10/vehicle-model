@@ -1,0 +1,9 @@
+﻿a,b,name,備註
+uf_arm1fix,uf_arm,uA1,上A1
+uf_arm2fix,uf_arm,uA2,上A2
+lf_arm1fix,lf_arm,lA1,下A1
+lf_arm2fix,lf_arm,lA2,下A2
+uf_arm,lf_arm,w,上A>>下A
+lf_arm,tie_rod,uAtie,上A>>tie
+uf_arm,tie_rod,lAtie,下A>>tie
+rack,tie_rod,racktie,rack>>tie

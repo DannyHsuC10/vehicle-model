@@ -1,0 +1,325 @@
+{
+  "simulation": {
+    "SIM_TIME": 5.0,
+    "DT": 0.005,
+    "enable_visual": true
+  },
+  "files": {
+    "nodes_path": "data/nodes.csv",
+    "rods_path": "data/rods.csv"
+  },
+  "geometry_override": {
+    "enable": false,
+    "nodes": {
+      "tie_rod": [
+        25,
+        -15,
+        12.5
+      ]
+    }
+  },
+  "inputs": [
+    {
+      "name": "steeringl",
+      "node": "rackl",
+      "constraint": "PositionConstraint",
+      "axis_nodes": [
+        "rack_r",
+        "rack_l"
+      ],
+      "motion": {
+        "motion_type": "s",
+        "input_type": "l",
+        "x_max": 40.0,
+        "x_min": -40.0,
+        "times": 1
+      },
+      "enable": true
+    },
+    {
+      "name": "steeringr",
+      "node": "rackr",
+      "constraint": "PositionConstraint",
+      "axis_nodes": [
+        "rack_r",
+        "rack_l"
+      ],
+      "motion": {
+        "motion_type": "s",
+        "input_type": "l",
+        "x_max": 40.0,
+        "x_min": -40.0,
+        "times": 1,
+        "normal_vector": [
+          0,
+          0,
+          1
+        ]
+      },
+      "enable": true
+    },
+    {
+      "name": "suspensionR",
+      "node": "ll_arm",
+      "constraint": "PositionConstraint",
+      "axis_nodes": [
+        "ll_arm1fix",
+        "ll_arm2fix"
+      ],
+      "motion": {
+        "motion_type": "f",
+        "input_type": "l",
+        "x_max": 25.0,
+        "x_min": -25.0,
+        "times": 1,
+        "normal_vector": [
+          0,
+          0,
+          4
+        ]
+      },
+      "enable": false
+    }
+  ],
+  "forces": [
+    {
+      "name": "rack_force",
+      "node": "rackl",
+      "axis_nodes": [
+        "rack_r",
+        "rack_l"
+      ],
+      "force": 1600.0
+    }
+  ],
+  "torques": [
+    {
+      "name": "wheel_torque",
+      "node": "tie_rodl",
+      "axis_nodes": [
+        "ll_arm",
+        "ul_arm"
+      ],
+      "torque": 0.0
+    }
+  ],
+  "targets": {
+    "node_targets": [
+      "rackl",
+      "ul_arm",
+      "ul_arm1fix",
+      "ul_arm2fix",
+      "ll_arm1fix",
+      "ll_arm2fix",
+      "ll_arm",
+      "tie_rodl",
+      "wheel_ol",
+      "wheel_il",
+      "push_rodl",
+      "rollerl1",
+      "rollerl2",
+      "ur_arm1fix",
+      "ur_arm2fix",
+      "lr_arm1fix",
+      "lr_arm2fix",
+      "ur_arm",
+      "lr_arm",
+      "tie_rodr",
+      "rackr",
+      "wheel_or",
+      "wheel_ir",
+      "push_rodr",
+      "rollerr1",
+      "rollerr2",
+      "rack_r",
+      "rack_l",
+      "O"
+    ],
+    "rod_targets": [
+      "luA1",
+      "luA2",
+      "llA1",
+      "llA2",
+      "lw",
+      "luAtie",
+      "llAtie",
+      "lracktie",
+      "lwtieo",
+      "lwuao",
+      "lwlao",
+      "lwtiei",
+      "lwuai",
+      "lwlai",
+      "rrl",
+      "rpl1",
+      "rpl2",
+      "ruA1",
+      "ruA2",
+      "rlA1",
+      "rlA2",
+      "rw",
+      "ruAtie",
+      "rlAtie",
+      "rracktie",
+      "rwtieo",
+      "rwuao",
+      "rwlao",
+      "rwtiei",
+      "rwuai",
+      "rwlai",
+      "rrr",
+      "rpr1",
+      "rpr2"
+    ]
+  },
+  "output": {
+    "plot": [
+      "rackl_x",
+      "rackl_y",
+      "rackl_z",
+      "rackl_v",
+      "rackl_a",
+      "rackl_vx",
+      "rackl_ax",
+      "rackl_vy",
+      "rackl_ay",
+      "rackl_vz",
+      "rackl_az",
+      "rackl_f",
+      "rackl_fx",
+      "rackl_fy",
+      "rackl_fz",
+      "ul_arm_x",
+      "ul_arm_y",
+      "ul_arm_z",
+      "ul_arm_v",
+      "ul_arm_a",
+      "ul_arm_vx",
+      "ul_arm_ax",
+      "ul_arm_vy",
+      "ul_arm_ay",
+      "ul_arm_vz",
+      "ul_arm_az",
+      "ul_arm_f",
+      "ul_arm_fx",
+      "ul_arm_fy",
+      "ul_arm_fz",
+      "ul_arm1fix_x",
+      "ul_arm1fix_y",
+      "ul_arm1fix_z",
+      "ul_arm1fix_v",
+      "ul_arm1fix_a",
+      "ul_arm1fix_vx",
+      "ul_arm1fix_ax",
+      "ul_arm1fix_vy",
+      "ul_arm1fix_ay",
+      "ul_arm1fix_vz",
+      "ul_arm1fix_az",
+      "ul_arm1fix_f",
+      "ul_arm1fix_fx",
+      "ul_arm1fix_fy",
+      "ul_arm1fix_fz",
+      "ul_arm2fix_x",
+      "ul_arm2fix_y",
+      "ul_arm2fix_z",
+      "ul_arm2fix_v",
+      "ul_arm2fix_a",
+      "ul_arm2fix_vx",
+      "ul_arm2fix_ax",
+      "ul_arm2fix_vy",
+      "ul_arm2fix_ay",
+      "ul_arm2fix_vz",
+      "ul_arm2fix_az",
+      "ul_arm2fix_f",
+      "ul_arm2fix_fx",
+      "ul_arm2fix_fy",
+      "ul_arm2fix_fz",
+      "ll_arm1fix_x",
+      "ll_arm1fix_y",
+      "ll_arm1fix_z",
+      "ll_arm1fix_v",
+      "ll_arm1fix_a",
+      "ll_arm1fix_vx",
+      "ll_arm1fix_ax",
+      "ll_arm1fix_vy",
+      "ll_arm1fix_ay",
+      "ll_arm1fix_vz",
+      "ll_arm1fix_az",
+      "ll_arm1fix_f",
+      "ll_arm1fix_fx",
+      "ll_arm1fix_fy",
+      "ll_arm1fix_fz",
+      "ll_arm2fix_x",
+      "ll_arm2fix_y",
+      "ll_arm2fix_z",
+      "ll_arm2fix_v",
+      "ll_arm2fix_a",
+      "ll_arm2fix_vx",
+      "ll_arm2fix_ax",
+      "ll_arm2fix_vy",
+      "ll_arm2fix_ay",
+      "ll_arm2fix_vz",
+      "ll_arm2fix_az",
+      "ll_arm2fix_f",
+      "ll_arm2fix_fx",
+      "ll_arm2fix_fy",
+      "ll_arm2fix_fz",
+      "ll_arm_x",
+      "ll_arm_y",
+      "ll_arm_z",
+      "ll_arm_v",
+      "ll_arm_a",
+      "ll_arm_vx",
+      "ll_arm_ax",
+      "ll_arm_vy",
+      "ll_arm_ay",
+      "ll_arm_vz",
+      "ll_arm_az",
+      "ll_arm_f",
+      "ll_arm_fx",
+      "ll_arm_fy",
+      "ll_arm_fz",
+      "tie_rodl_x",
+      "tie_rodl_y",
+      "tie_rodl_z",
+      "tie_rodl_v",
+      "tie_rodl_a",
+      "rpr2_omegay",
+      "rpr2_alphay",
+      "rpr2_omegaz",
+      "rpr2_alphaz",
+      "tau"
+    ],
+    "save_plot": true,
+    "print": [],
+    "save_csv": true
+  },
+  "static": {
+    "files": {
+      "nodes_path": "data/nodes.csv",
+      "rods_path": "data/rods.csv"
+    },
+    "forces": [
+      {
+        "node": "ll_arm",
+        "value": [
+          0.0,
+          0.0,
+          800.0
+        ]
+      },
+      {
+        "node": "lr_arm",
+        "value": [
+          0.0,
+          0.0,
+          800.0
+        ]
+      }
+    ],
+    "output": {
+      "report": true,
+      "csv": true
+    }
+  }
+}

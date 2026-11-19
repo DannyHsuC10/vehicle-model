@@ -60,9 +60,8 @@ def write_index():
     lines.extend(["## GUI 的額外計算入口","","原始碼：[gui.py](../vehicle_lab/gui.py)","",
         "| 方法 | 詳細章節 |","| --- | --- |"])
     gui={"01":["RateEditor.refresh","RateEditor.apply","RateEditor.sync"],
-        "03":["ToolPanel.load_dampers","ToolPanel.apply_dampers","ToolPanel.match_damping","ToolPanel.send_damping"],
         "05":["GeometryEditor.mirror","GeometryEditor.reset","ToolPanel.geometry_goals"],
-        "06":["ToolPanel.kingpin_goals"],"08":["ToolPanel.optimize_balance"],
+        "06":["ToolPanel.kingpin_goals"],
         "09":["ToolPanel.density_helper","ToolPanel.apply_wing"],
         "11":["VehicleEditor.select_motor_csv","VehicleEditor.preview_motor_curve"],
         "12":["open_dialog","VehicleEditor.edit","VehicleEditor.parameter_dialog",
