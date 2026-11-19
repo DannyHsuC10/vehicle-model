@@ -7,9 +7,8 @@ import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from SuspensionGeometryLab.suspension_geometry_lab import project as suspension
-from SuspensionGeometryLab.suspension_geometry_lab.hardpoints import CORNERS
-
+from ._geometry_support import project as geometry_project
+from ._geometry_support.hardpoints import CORNERS
 from .animation_settings import default_animation, validate_animation
 from .dynamics_settings import default_dynamics, validate_dynamics
 
@@ -24,7 +23,7 @@ def from_suspension(geometry):
     return {
         "format": FORMAT,
         "schema_version": 1,
-        "geometry": copy.deepcopy(suspension.validate(geometry)),
+        "geometry": copy.deepcopy(geometry_project.validate(geometry)),
         "steering": {
             axle: {"outer": [-0.075, -0.075, -0.02], "inner": [-0.075, -0.34, -0.02]}
             for axle in AXLES
@@ -36,7 +35,7 @@ def from_suspension(geometry):
 
 
 def default_project():
-    return from_suspension(suspension.default_project())
+    return from_suspension(geometry_project.default_project())
 
 
 def finite_number(value, label):
@@ -53,7 +52,7 @@ def validate(data):
             or type(data["schema_version"]) is not int or data["schema_version"] != 1):
         raise ValueError("需要 MultibodyGeometryLab v1 專案或 SuspensionGeometryLab 專案。")
     data = copy.deepcopy(data)
-    data["geometry"] = suspension.validate(data["geometry"])
+    data["geometry"] = geometry_project.validate(data["geometry"])
     data["animation"] = validate_animation(data.get("animation", default_animation()))
     data["dynamics"] = validate_dynamics(data.get("dynamics", default_dynamics()))
     steering, motion = data["steering"], data["motion"]

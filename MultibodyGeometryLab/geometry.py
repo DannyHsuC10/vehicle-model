@@ -1,4 +1,4 @@
-"""Build the reference mechanism using SuspensionGeometryLab's static geometry."""
+"""Build the reference mechanism from the project's static suspension geometry."""
 
 from dataclasses import dataclass
 from itertools import combinations
@@ -6,9 +6,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from SuspensionGeometryLab.suspension_geometry_lab import hardpoints, project as suspension
-from SuspensionGeometryLab.suspension_geometry_lab.static.fv.wireframe_geometry import build_wireframe_scene
-
+from ._geometry_support import hardpoints, project as geometry_project
+from ._geometry_support.static.fv.wireframe_geometry import build_wireframe_scene
 from .project import validate
 
 if TYPE_CHECKING:
@@ -44,8 +43,8 @@ class VehicleGeometry:
 
 def static_geometry(geometry):
     """Return the common hardpoints, car and four static wheel centers."""
-    geometry = suspension.validate(geometry)
-    car, front, rear = suspension.static_objects(geometry)
+    geometry = geometry_project.validate(geometry)
+    car, front, rear = geometry_project.static_objects(geometry)
     if hardpoints.enabled(geometry):
         scene, _ = hardpoints.build_scene(geometry, car, front, rear)
         points = scene.geometry["hardpoints"]
@@ -54,7 +53,7 @@ def static_geometry(geometry):
         for axle, checks in scene.geometry["mount_position_checks"].items():
             for name, check in checks.items():
                 if check["requested_x"] is not None and check["fallback"]:
-                    raise ValueError(f"{axle} · {suspension.MOUNT_X_FIELDS[name]}：{check['message']}")
+                    raise ValueError(f"{axle} · {geometry_project.MOUNT_X_FIELDS[name]}：{check['message']}")
         points = hardpoints.from_scene(scene)
     centers = {key: wheel["center"] for key, wheel in scene.geometry["wheel_projection_geometry"].items()}
     return points, car, centers

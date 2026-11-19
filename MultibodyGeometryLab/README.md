@@ -1,10 +1,12 @@
 # MultibodyGeometryLab 四輪多體幾何工作台
 
-工作台沿用 SuspensionGeometryLab 的車輛與懸吊參數，建立四輪雙 A 臂的靜態幾何及固定桿長。可指定行程與轉向來求運動學，也可加入直推避震器、輪端質量與輪胎接地力，模擬路面擾動下的車身與四輪響應。
+工作台依車輛參數或硬點座標建立四輪雙 A 臂的靜態幾何及固定桿長。可指定行程與轉向來求運動學，也可加入直推避震器、輪端質量與輪胎接地力，模擬路面擾動下的車身與四輪響應。
 
 ## 啟動
 
-在 Windows 雙擊 `Start-MultibodyGeometryLab.bat`，或從車輛專案的根目錄執行以下指令。需要 Python 3.10 以上、Tkinter 和 NumPy。靜態幾何與參數驗證直接使用同一個專案根目錄下的 `SuspensionGeometryLab`。
+需要 Python 3.10 以上、Tkinter 和 NumPy。整個 `MultibodyGeometryLab` 資料夾可單獨移動或複製，靜態幾何、參數驗證與預設專案都包含在其中。在 Windows 雙擊 `Start-MultibodyGeometryLab.bat`，或從 `MultibodyGeometryLab` 的上一層執行以下指令。
+
+一般啟動會載入 `new/suspension_geometry.json` 的內建副本。可用 `--project` 指定其他專案。
 
 ```powershell
 python -m pip install -r MultibodyGeometryLab/requirements.txt
@@ -87,6 +89,7 @@ python -m MultibodyGeometryLab --project MultibodyGeometryLab/projects/Example.j
 - 車輛採 X 向前、Y 向左、Z 向上。前軸 X 為 0，後軸 X 為負軸距。輪心上壓為正，齒條向左平移為正。同一車軸的左、右內側接點使用同一個齒條位移。
 - A 臂硬點和車身接點 X 在介面以 mm 編輯。拉桿偏移同樣以 mm 編輯，但 Y 採每輪向外為正，兩側在車輛座標中互為鏡射。四輪工況的位移、速度和加速度以 mm、mm/s、mm/s² 輸入。角度以度顯示，羊角角速度及角加速度以 rad/s、rad/s² 顯示。
 - 專案頂層含有 `format`、`schema_version`、`geometry`、`steering`、`motion`、`animation` 和 `dynamics`。其中 `geometry` 使用 SuspensionGeometryLab 格式，長度以 m 保存。`steering` 的前後軸內外側接點偏移也以 m 保存，`motion`、`animation` 和 `dynamics` 使用各自介面標示的單位。
+- 匯入的 `static_camber_deg`、`roll_stiffness_ratio` 與 `kinematics_hardpoints` 會隨專案保留。多體解算仍使用工作台內的輪軸零位、避震器與轉向接點設定。
 - 前、後軸預設的轉向拉桿接點是範例座標，可改成實車量測值。初始輪軸方向沿全車 Y 軸，結果中的轉向角和外傾角以此為零位。
 
 ## 求解假設
@@ -97,7 +100,7 @@ python -m MultibodyGeometryLab --project MultibodyGeometryLab/projects/Example.j
 
 ## 測試
 
-從專案根目錄執行。
+從 `MultibodyGeometryLab` 的上一層執行。
 
 ```powershell
 python -m unittest discover -s MultibodyGeometryLab/tests -v

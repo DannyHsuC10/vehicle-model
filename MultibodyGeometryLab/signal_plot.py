@@ -6,8 +6,7 @@ from tkinter import ttk
 
 import numpy as np
 
-from SuspensionGeometryLab.suspension_geometry_lab.hardpoints import CORNERS
-
+from ._geometry_support.hardpoints import CORNERS
 from .elements import PUSH_ROD
 from .geometry import LINKS, POINTS
 

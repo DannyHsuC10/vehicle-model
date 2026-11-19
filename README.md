@@ -4,6 +4,8 @@
 
 | 工具 | 啟動方式 | 說明 |
 | --- | --- | --- |
+| JacobianKinematicsLab · 硬點運動學 | 雙擊 `JacobianKinematicsLab/Start-JacobianKinematicsLab.bat` | [操作說明](JacobianKinematicsLab/README.md) |
+| MultibodyGeometryLab · 四輪多體幾何 | 雙擊 `MultibodyGeometryLab/Start-MultibodyGeometryLab.bat` | [操作說明](MultibodyGeometryLab/README.md) |
 | SuspensionGeometryLab：懸吊幾何工作台 | 雙擊 `SuspensionGeometryLab/Start-SuspensionGeometryLab.bat` | [操作說明](SuspensionGeometryLab/README.md) |
 | VehicleLab：整車分析工具 | 雙擊 `VehicleLab/Start-VehicleLab.bat` | [操作說明](VehicleLab/README.md) |
 | LapSimLab：圈速模擬 | 雙擊 `LapSimLab/Start-LapSimLab.bat` | [操作說明](LapSimLab/README.md) |
@@ -15,7 +17,7 @@
 
 SuspensionGeometryLab、VehicleLab 和 SuspensionDynamicsLab 各有 `tests/` 與 `Start-Tests.bat`。雙擊該工具內的 `Start-Tests.bat` 會執行完整測試（含原生視窗），也可在該工具資料夾執行 `python -m unittest discover -s tests -v`。
 
-各套工具皆需要 Python 3.10+ 與 Tkinter。VehicleInitialSizingLab 另以 WebView2 顯示 Markdown 和 LaTeX。SuspensionGeometryLab、SuspensionDynamicsLab、SuspensionSetupLab 與 LapSimLab 另需要 NumPy。既有工具的 PNG 匯出需要 Pillow。
+各套工具皆需要 Python 3.10+ 與 Tkinter。VehicleInitialSizingLab 另以 WebView2 顯示 Markdown 和 LaTeX。JacobianKinematicsLab、MultibodyGeometryLab、SuspensionGeometryLab、SuspensionDynamicsLab、SuspensionSetupLab 與 LapSimLab 另需要 NumPy。既有工具的 PNG 匯出需要 Pillow。
 
 既有車輛專案位於 `VehicleLab/projects/vehicle_project.json`；懸吊專案可存入 `SuspensionGeometryLab/projects/`。兩套工具的 JSON 格式不同，請各自開啟對應的專案。
 

@@ -3,8 +3,7 @@
 import tkinter as tk
 from tkinter import ttk
 
-from SuspensionGeometryLab.suspension_geometry_lab.hardpoints import CORNERS
-
+from ._geometry_support.hardpoints import CORNERS
 from .dynamics_settings import CORNER_LIMITS, HEAVE_LIMITS, SIMULATION_LIMITS, validate_dynamics, validate_heave
 
 

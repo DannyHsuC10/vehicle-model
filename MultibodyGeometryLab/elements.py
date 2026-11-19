@@ -3,7 +3,7 @@
 from dataclasses import asdict, dataclass
 from math import isfinite
 
-from SuspensionGeometryLab.suspension_geometry_lab.hardpoints import CORNERS
+from ._geometry_support.hardpoints import CORNERS
 
 
 DAMPER_POINT = "DAMPER"

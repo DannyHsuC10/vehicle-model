@@ -5,8 +5,7 @@ from time import monotonic
 import tkinter as tk
 from tkinter import ttk
 
-from SuspensionGeometryLab.suspension_geometry_lab.hardpoints import CORNERS
-
+from ._geometry_support.hardpoints import CORNERS
 from .animation_settings import AMPLITUDE_LIMITS, DEFAULT_AMPLITUDES, PRESETS, validate_animation
 
 

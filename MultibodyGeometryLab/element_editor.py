@@ -5,8 +5,7 @@ from math import isfinite
 import tkinter as tk
 from tkinter import ttk
 
-from SuspensionGeometryLab.suspension_geometry_lab.hardpoints import CORNERS
-
+from ._geometry_support.hardpoints import CORNERS
 from .dynamics_settings import CORNER_LIMITS
 from .elements import DAMPER_POINT, PUSH_ROD, validate_elements
 from .geometry import POINTS

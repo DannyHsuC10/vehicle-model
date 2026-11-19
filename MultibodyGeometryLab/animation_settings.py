@@ -2,7 +2,7 @@
 
 import math
 
-from SuspensionGeometryLab.suspension_geometry_lab.hardpoints import CORNERS
+from ._geometry_support.hardpoints import CORNERS
 
 
 PRESETS = {

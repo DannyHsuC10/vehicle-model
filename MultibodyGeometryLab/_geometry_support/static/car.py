@@ -3,8 +3,6 @@
 Analysis ranges and plotting/UI options live in analysis_settings.py.
 """
 
-from pathlib import Path
-
 import numpy as np
 
 
@@ -30,10 +28,13 @@ class Car:
         # ------------------------------------------------------------------
         # Tire parameters
         # ------------------------------------------------------------------
-        self.tir = str(Path(__file__).resolve().parents[2] / "input_data" / "tire" / "tire.tir")
+        self.tir = "tire.tir"  # Tire parameter filename, if used by a model
         self.free_radius = 205.73999999999998 / 1000  # Unloaded radius [m]
         self.K_tire = 80.185 * 1000  # Vertical tire stiffness [N/m] (W8)
         self.tire_width = 190.5 / 1000  # Tire section width [m]
+        self.rim_inner_diameter = 9.625 * 25.4 / 1000  # Rim inner diameter [m] (10 in)
+        self.gap = 20 / 1000  # Rim radial clearance [m] (20 mm)
+        self.steer = 36.0  # Rotation about the kingpin axis [deg]
 
         # Static loaded tire radii for front and rear axles [m].
         self.load_Radius = (
@@ -51,8 +52,8 @@ class SuspensionF:
         # ------------------------------------------------------------------
         self.scrub_radius = 25 / 1000  # Scrub radius [m]
         self.kpi = np.deg2rad(12)  # Kingpin inclination [rad]
-        self.h_rc = 35 / 1000  # Target roll-center height [m]
-        self.fvsa = 750 / 1000  # Front-view swing-arm length [m]
+        self.h_RC = 35 / 1000  # Target roll-center height [m]
+        self.fvsa = 1000 / 1000  # Front-view swing-arm length [m]
 
         self.Au = 85 / 1000  # Upper upright point offset from wheel center [m]
         self.Al = 90 / 1000  # Lower upright point offset from wheel center [m]
@@ -67,9 +68,8 @@ class SuspensionF:
         # ------------------------------------------------------------------
         self.mechanical_trail_sv = 15 / 1000  # Mechanical trail [m]
         self.caster_sv_deg = 5  # Caster angle [deg]
-        self.front_brake_bias_sv = 0.7  # Fraction of braking force at front axle
-        self.target_anti_dive_sv = 0.15  # Anti-dive fraction (0.5 means 50%)
-        self.target_anti_lift_sv = 0.0  # Anti-lift fraction (0.0 means 0%)
+        self.target_anti_sv = .2 / .7  # CP-to-IC slope normalized with positive X toward the other axle
+        self.svsa = 3.4746810312241383  # Signed CP-to-IC horizontal distance [m]
 
         # Compatibility aliases retained for older side-view scripts.
         self.mechanical_tail = self.mechanical_trail_sv
@@ -84,9 +84,9 @@ class SuspensionR:
         # Front-view suspension geometry
         # ------------------------------------------------------------------
         self.scrub_radius = 18 / 1000  # Scrub radius [m]
-        self.kpi = np.deg2rad(0)  # Kingpin inclination [rad]
-        self.h_rc = 25 / 1000  # Target roll-center height [m]
-        self.fvsa = 2000 / 1000  # Front-view swing-arm length [m]
+        self.kpi = np.deg2rad(13)  # Kingpin inclination [rad]
+        self.h_RC = 40 / 1000  # Target roll-center height [m]
+        self.fvsa = 1000 / 1000  # Front-view swing-arm length [m]
 
         self.Au = 85 / 1000  # Upper upright point offset from wheel center [m]
         self.Al = 90 / 1000  # Lower upright point offset from wheel center [m]
@@ -101,9 +101,8 @@ class SuspensionR:
         # ------------------------------------------------------------------
         self.mechanical_trail_sv = 0 / 1000  # Mechanical trail [m]
         self.caster_sv_deg = 0.0  # Caster angle [deg]
-        self.front_brake_bias_sv = 0.7  # Fraction of braking force at front axle
-        self.target_anti_dive_sv = 0.15  # Anti-dive fraction (0.5 means 50%)
-        self.target_anti_lift_sv = 0.0  # Anti-lift fraction (0.0 means 0%)
+        self.target_anti_sv = .08571428571428573 / .3
+        self.svsa = 3.48158902286549  # Positive toward the front axle [m]
 
         # Compatibility aliases retained for older side-view scripts.
         self.mechanical_tail = self.mechanical_trail_sv

@@ -1,0 +1,9 @@
+{
+  "name": "StaticWireframe 基準車輛",
+  "source": "new/suspension_geometry.json",
+  "analysis": {
+    "bump_mm": 20.0,
+    "droop_mm": 30.0,
+    "samples": 21
+  }
+}

@@ -8,9 +8,7 @@ from threading import Thread
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-from SuspensionGeometryLab.suspension_geometry_lab import hardpoints, project as suspension
-from SuspensionGeometryLab.suspension_geometry_lab.widgets import ScrollFrame
-
+from ._geometry_support import hardpoints, project as geometry_project
 from .animation import build_animation
 from .animation_controls import AnimationEditor, AnimationPlayer
 from .animation_settings import PRESETS
@@ -28,6 +26,7 @@ from .rigid_body import simulate_rigid_road
 from .signal_plot import MOUNT_LABELS, SignalView
 from .solver import Unreachable, VehicleResult, solve_vehicle
 from .viewport import MechanismView
+from .widgets import ScrollFrame
 
 
 PROJECTS = Path(__file__).with_name("projects")
@@ -208,13 +207,13 @@ class Workbench(ttk.Frame):
                 ttk.Label(tab.content, text="X 取靜態 UBJ。右側 Y 為左側的相反值，Z 共用。",
                           wraplength=320, padding=(8, 3, 8, 3)).pack(anchor="w")
                 ttk.Separator(tab.content).pack(fill="x", padx=8, pady=8)
-            for key, (label, unit) in suspension.FIELDS[group].items():
+            for key, (label, unit) in geometry_project.FIELDS[group].items():
                 self.field(tab.content, ("geometry", group, key), label, unit,
                            axle_field=group in AXLES)
             if group not in AXLES:
                 continue
             ttk.Label(tab.content, text="車身接點 X · 留白自動", padding=(8, 12, 0, 3)).pack(anchor="w")
-            for key, label in suspension.MOUNT_X_FIELDS.items():
+            for key, label in geometry_project.MOUNT_X_FIELDS.items():
                 self.field(tab.content, ("mount", group, key), label, "mm", axle_field=True)
             ttk.Label(tab.content, text="拉桿接點相對輪心的偏移", padding=(8, 12, 0, 3)).pack(anchor="w")
             for endpoint, label in (("outer", "外側"), ("inner", "內側")):
@@ -409,12 +408,12 @@ class Workbench(ttk.Frame):
         geometry = copy.deepcopy(self.data["geometry"])
         geometry["name"] = self.name.get().strip()
         for group in ("vehicle", *AXLES):
-            for key, (label, _unit) in suspension.FIELDS[group].items():
+            for key, (label, _unit) in geometry_project.FIELDS[group].items():
                 geometry[group][key] = self.number(("geometry", group, key), label)
         geometry["arm_mount_x"] = {
             axle: {key: (self.number(("mount", axle, key), label) / 1000
                          if self.fields["mount", axle, key].get().strip() else None)
-                   for key, label in suspension.MOUNT_X_FIELDS.items()} for axle in AXLES
+                   for key, label in geometry_project.MOUNT_X_FIELDS.items()} for axle in AXLES
         }
         if self.hardpoint_draft is not None:
             geometry["hardpoints"] = {"enabled": direct, "corners": copy.deepcopy(self.hardpoint_draft)}
@@ -489,7 +488,7 @@ class Workbench(ttk.Frame):
                 elif group == "pushrod":
                     value = self.data["dynamics"]["pushrod_mounts"][channel][field]
                 elif group == "mount":
-                    value = suspension.mount_x_settings(geometry)[channel][field]
+                    value = geometry_project.mount_x_settings(geometry)[channel][field]
                     value = "" if value is None else value * 1000
                 elif group == "steering":
                     value = self.data["steering"][channel][field][index[0]] * 1000
