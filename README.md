@@ -6,6 +6,7 @@
 | --- | --- | --- |
 | JacobianKinematicsLab · 硬點運動學 | 雙擊 `JacobianKinematicsLab/Start-JacobianKinematicsLab.bat` | [操作說明](JacobianKinematicsLab/README.md) |
 | MultibodyGeometryLab · 四輪多體幾何 | 雙擊 `MultibodyGeometryLab/Start-MultibodyGeometryLab.bat` | [操作說明](MultibodyGeometryLab/README.md) |
+| SuspensionStaticsLab · 懸吊靜力分析 | 雙擊 `SuspensionStaticsLab/Start-SuspensionStaticsLab.bat` | [操作說明](SuspensionStaticsLab/README.md) |
 | SuspensionGeometryLab：懸吊幾何工作台 | 雙擊 `SuspensionGeometryLab/Start-SuspensionGeometryLab.bat` | [操作說明](SuspensionGeometryLab/README.md) |
 | VehicleLab：整車分析工具 | 雙擊 `VehicleLab/Start-VehicleLab.bat` | [操作說明](VehicleLab/README.md) |
 | LapSimLab：圈速模擬 | 雙擊 `LapSimLab/Start-LapSimLab.bat` | [操作說明](LapSimLab/README.md) |
