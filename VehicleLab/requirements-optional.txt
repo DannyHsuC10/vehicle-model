@@ -1,3 +1,0 @@
-# The desktop application and numerical core use only Python's standard library.
-# Install only if PNG export is desired and Pillow is not already available.
-Pillow>=10.0
