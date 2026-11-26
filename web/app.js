@@ -17,8 +17,7 @@ const paintRoute = routeView(byId("map"));
 const paintTime = timeView(byId("chart"), byId("chart-legend"));
 const paintReplay = replayView(byId("vehicle-scene"), byId("gg-diagram"));
 const emptyCourse = [];
-let guides = { straight: { xy: [[0, 0], [75, 0]], length: 75 } };
-let guide = emptyCourse;
+let courses = { straight: { length: 75 } };
 let selectedMode = "skidpad";
 const modeFields = {};
 let activeJob;
@@ -53,17 +52,14 @@ function courseName(mode) {
 
 function updateCourse() {
   const mode = selectedMode;
-  const length = guides[mode]?.length;
-  guide = guides[mode]?.xy || emptyCourse;
+  const length = courses[mode]?.length;
   byId("course-name").textContent = courseName(mode);
   byId("course-meta").textContent = length > 0
     ? `${modes[mode].description} · ${length.toFixed(2)} m` : modes[mode].description;
   if (!result) {
     byId("timing-label").textContent = mode === "straight" ? "加速時間" : "最佳圈速";
     byId("distance").textContent = length > 0 ? length.toFixed(2) : "—";
-    byId("map-caption").textContent = `${courseName(mode)} · 賽道預覽`;
-    byId("map-legend").hidden = !guide.length;
-    redraw();
+    byId("map-caption").textContent = courseName(mode);
   }
 }
 
@@ -79,12 +75,13 @@ function selectMode(mode, restore = true) {
 }
 
 function redraw() {
-  paintRoute(result?.centerline || guide, result?.series, cursor);
+  paintRoute(result?.centerline || emptyCourse, result?.series, cursor);
   paintTime(`${revision}:${byId("signal").value}`, result?.series, byId("signal").value, cursor, result?.warmupEnd);
   paintReplay(result, cursor, byId("camera").value === "overhead");
 }
 
 function seek(index) {
+  if (!result) return;
   cursor = index;
   byId("scrub").value = index;
   byId("play-time").textContent = `${result.series.time_s[index].toFixed(2)} s`;
@@ -106,6 +103,7 @@ function pause() {
 }
 
 function play() {
+  if (!result) return;
   if (animation) return pause();
   const times = result.series.time_s;
   if (cursor === times.length - 1) seek(0);
@@ -148,9 +146,8 @@ function showResult(data, downloads) {
   byId("map-caption").textContent = `${data.courseName} · 模擬結果`;
   byId("min-speed").textContent = (3.6 * slowest).toFixed(1);
   byId("max-speed").textContent = (3.6 * fastest).toFixed(1);
-  byId("map-legend").hidden = byId("speed-key").hidden = false;
-  byId("chart-empty").hidden = true;
-  byId("replay").hidden = byId("signal").disabled = false;
+  byId("results").removeAttribute("data-empty");
+  byId("map-legend").hidden = byId("replay-controls").disabled = byId("signal").disabled = false;
   byId("scrub").max = data.series.time_s.length - 1;
   byId("timing-head").replaceChildren(tableRow(straight
     ? ["距離 (m)", "時間 (s)", "終速 (km/h)"] : ["計時圈", "圈速 (s)", "起點 (s)", "終點 (s)"], "th"));
@@ -263,10 +260,10 @@ resize.observe(byId("vehicle-scene").parentElement);
 resize.observe(byId("gg-diagram"));
 selectMode(field("mode").value, false);
 fetch(new URL("./courses.json", import.meta.url)).then(response => {
-  if (!response.ok) throw new Error("賽道預覽載入失敗。");
+  if (!response.ok) throw new Error("工況資料載入失敗。");
   return response.json();
 }).then(data => {
-  guides = data;
+  courses = data;
   updateCourse();
 }).catch(error => {
   if (!activeJob && !result) status(error.message, "error");

@@ -48,11 +48,11 @@ def main():
         archive.write(LAB / "_vendor/pacejka/LICENSE", "Vehicle14DOFLab/_vendor/pacejka/LICENSE")
         archive.write(WEB / "browser_solver.py", "browser_solver.py")
     track = Track.from_csv(SKIDPAD)
-    guides = {
-        "skidpad": {"xy": [*track.xy.tolist(), track.xy[0].tolist()], "length": float(track.length)},
-        "straight": {"xy": [[0., 0.], [75., 0.]], "length": 75.},
+    courses = {
+        "skidpad": {"length": float(track.length)},
+        "straight": {"length": 75.},
     }
-    (DIST / "courses.json").write_text(json.dumps(guides, separators=(",", ":")), encoding="utf-8")
+    (DIST / "courses.json").write_text(json.dumps(courses, separators=(",", ":")), encoding="utf-8")
     copy2(SKIDPAD, DIST / "skidpad-example.csv")
     vehicle = json.loads((LAB / "lp03.json").read_text(encoding="utf-8"))
     vehicle["aero"] = aero_settings(vehicle, LAB)

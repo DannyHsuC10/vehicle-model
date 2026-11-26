@@ -85,13 +85,7 @@ export function routeView(canvas) {
       for (let x = 18; x < width; x += 24) { ctx.moveTo(x, 0); ctx.lineTo(x, height); }
       for (let y = 18; y < height; y += 24) { ctx.moveTo(0, y); ctx.lineTo(width, y); }
       ctx.stroke();
-      if (!course.length) {
-        ctx.fillStyle = "#9eafc1";
-        ctx.font = "14px system-ui";
-        ctx.textAlign = "center";
-        ctx.fillText("執行模擬後顯示路線", width / 2, height / 2);
-        return;
-      }
+      if (!course.length) return;
       const [minX, maxX] = extent(course.map(point => point[0]));
       const [minY, maxY] = extent(course.map(point => point[1]));
       const [fromX, toX] = series ? extent(series.x_m) : [minX, maxX];

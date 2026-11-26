@@ -95,17 +95,20 @@
           </section>
         </form>
       </aside>
-      <section class="results" aria-label="模擬結果" tabindex="0">
+      <section class="results" id="results" aria-label="模擬結果" tabindex="0" data-empty>
         <div class="metrics">
           <div class="metric panel"><span id="timing-label">最佳圈速</span><strong id="time">—</strong><small>s</small></div>
           <div class="metric panel"><span>最高車速</span><strong id="peak-speed">—</strong><small>km/h</small></div>
           <div class="metric panel"><span>峰值側向加速度</span><strong id="peak-lateral">—</strong><small>g</small></div>
           <div class="metric panel"><span>工況距離</span><strong id="distance">—</strong><small>m</small></div>
         </div>
-        <section class="replay panel" id="replay" hidden>
-          <div class="section-heading"><h2>駕駛回放</h2><output id="replay-speed">0.0 km/h</output></div>
+        <section class="replay panel" id="replay">
+          <div class="section-heading"><h2>駕駛回放</h2><output id="replay-speed">— km/h</output></div>
           <div class="replay-layout">
-            <div class="replay-scene"><canvas id="vehicle-scene" role="img" aria-label="隨遙測移動的立體方程式賽車"></canvas></div>
+            <div class="replay-scene">
+              <canvas id="vehicle-scene" role="img" aria-label="隨遙測移動的立體方程式賽車"></canvas>
+              <p class="empty-state">模擬完成後可播放車輛動畫</p>
+            </div>
             <div class="replay-instruments">
               <div class="gg-panel">
                 <h3>G-G 加速度圓</h3>
@@ -116,7 +119,7 @@
               <label class="pedal braking">煞車 <output id="brake-value">0%</output><meter id="brake" min="0" max="1" value="0" aria-label="煞車"></meter></label>
             </div>
           </div>
-          <div class="playback">
+          <fieldset class="playback" id="replay-controls" aria-label="回放控制" disabled>
             <button id="play" type="button">播放</button>
             <button id="restart" type="button">回起點</button>
             <label class="sr-only" for="camera">回放視角</label>
@@ -124,13 +127,16 @@
             <label class="sr-only" for="play-rate">播放倍率</label>
             <select id="play-rate"><option value=".25">0.25×</option><option value=".5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
             <input id="scrub" type="range" min="0" max="1" value="0" step="1" aria-label="回放時間軸">
-            <output id="play-time" for="scrub">0.00 s</output>
-          </div>
+            <output id="play-time" for="scrub">— s</output>
+          </fieldset>
         </section>
         <section class="map panel">
-          <div class="section-heading"><div><h2>行駛軌跡</h2><p id="map-caption">9.125 m 定圓 · 賽道預覽</p></div><span class="map-tag">俯視</span></div>
-          <div class="map-frame"><canvas id="map" role="img" aria-label="賽道中心線與車輛行駛軌跡"></canvas></div>
-          <div id="map-legend" class="map-legend"><span class="legend-line"></span>賽道中心線 <span class="start-dot"></span>起點<div id="speed-key" hidden><span id="min-speed">0</span><i></i><span id="max-speed">100</span> km/h</div></div>
+          <div class="section-heading"><div><h2>行駛軌跡</h2><p id="map-caption">9.125 m 定圓</p></div><span class="map-tag">俯視</span></div>
+          <div class="map-frame">
+            <canvas id="map" role="img" aria-label="賽道中心線與車輛行駛軌跡"></canvas>
+            <p class="empty-state">模擬完成後顯示行駛軌跡</p>
+          </div>
+          <div id="map-legend" class="map-legend" hidden><span class="legend-line"></span>賽道中心線 <span class="start-dot"></span>起點<div id="speed-key"><span id="min-speed"></span><i></i><span id="max-speed"></span> km/h</div></div>
         </section>
         <section class="chart panel">
           <div class="section-heading"><h2>遙測分析</h2><label class="sr-only" for="signal">遙測項目</label>
@@ -141,7 +147,7 @@
               <option value="brake">煞車扭矩</option><option value="aero">空力</option><option value="cop">空力作用點</option><option value="pedals">油門與煞車</option>
             </select>
           </div>
-          <div class="chart-frame"><canvas id="chart" role="img" aria-label="模擬遙測時間圖"></canvas><p id="chart-empty">執行模擬後顯示遙測資料</p></div>
+          <div class="chart-frame"><canvas id="chart" role="img" aria-label="模擬遙測時間圖"></canvas><p class="empty-state">模擬完成後顯示遙測圖表</p></div>
           <div id="chart-legend" class="chart-legend"></div>
         </section>
         <section class="exports panel" id="exports" hidden>
