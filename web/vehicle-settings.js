@@ -36,22 +36,29 @@ const brake = [
   }),
 ];
 
-const corners = ["FL", "FR", "RL", "RR"];
-function wheel(corner, index) {
+const axles = [
+  { end: "front", label: "前輪", corner: "FL", index: 0 },
+  { end: "rear", label: "後輪", corner: "RL", index: 2 },
+];
+const sharedWheels = [
+  ["vehicle.tire_pressure_kpa.0", "胎壓", "kPa", 1],
+  ["vehicle.wheel_inertia_kg_m2.0", "自轉慣量", "kg·m²", .01],
+  ["suspension.tires.FL.k", "垂向剛性", "N/mm", .01],
+  ["suspension.tires.FL.c", "垂向阻尼", "N·s/m", 0],
+];
+
+function wheel({ end, corner, index }) {
   return [
-    [`vehicle.tire_pressure_kpa.${index}`, "胎壓", "kPa", 1],
-    [`vehicle.wheel_inertia_kg_m2.${index}`, "自轉慣量", "kg·m²", .01],
+    [`vehicle.${end}_free_radius_m`, "自由半徑", "m", .01],
     [`vehicle.static_camber_deg.${index}`, "靜態外傾", "°", -20, 20],
     [`vehicle.drive_scale.${index}`, "驅動倍率", "", 0, 1],
     [`suspension.tires.${corner}.mu`, "簧下質量", "kg", .01],
-    [`suspension.tires.${corner}.k`, "垂向剛性", "N/mm", .01],
-    [`suspension.tires.${corner}.c`, "垂向阻尼", "N·s/m", 0],
   ];
 }
 
 const channelNames = {
   heave_f: "前軸升沉", heave_r: "後軸升沉", roll_f: "前軸側傾", roll_r: "後軸側傾",
-  FL: "FL 直推", FR: "FR 直推", RL: "RL 直推", RR: "RR 直推",
+  FL: "前軸直推", RL: "後軸直推",
 };
 
 function channel(name) {
@@ -106,8 +113,12 @@ function makeGroup(title, specifications) {
 }
 
 export function setupVehicleSettings(container, form) {
-  const wheels = makeGroup("輪胎與輪端", [["vehicle.free_radius_m", "自由半徑", "m", .01]]);
-  corners.forEach((corner, index) => wheels.append(makeGroup(corner, wheel(corner, index))));
+  const wheels = makeGroup("輪胎與輪端（左右對稱）", sharedWheels);
+  const wheelNote = document.createElement("p");
+  wheelNote.className = "field-note";
+  wheelNote.textContent = "上方四項由四輪共用。匯入的設定若有差異，共用值採左前輪，同軸值採該軸左輪。";
+  wheels.append(wheelNote);
+  axles.forEach(axle => wheels.append(makeGroup(axle.label, wheel(axle))));
   const suspension = makeGroup("懸吊與幾何", [
     ["vehicle.suspension_geometry.load_transfer_enabled", "Roll Center／Anti 傳力", "", null, null, true],
     ["suspension.vehicle.h_rc_f", "前 Roll Center 高度", "mm", -10000, 10000, false, "any", 1000],
@@ -120,8 +131,8 @@ export function setupVehicleSettings(container, form) {
   const geometryNote = document.createElement("p");
   geometryNote.className = "field-note";
   geometryNote.textContent = "啟用傳力後會使用 Roll Center 與 Anti。Roll Center 為離地高度，Anti 為全車載重轉移百分比。";
-  const camber = makeGroup("Camber Gain（每 25 mm 壓縮）", corners.map((corner, index) => [
-    `vehicle.suspension_geometry.camber_gain_deg_per_25mm.${index}`, corner, "°", -30, 30,
+  const camber = makeGroup("Camber Gain（每 25 mm 壓縮）", axles.map(({ label, index }) => [
+    `vehicle.suspension_geometry.camber_gain_deg_per_25mm.${index}`, label, "°", -30, 30,
   ]));
   const camberNote = document.createElement("p");
   camberNote.className = "field-note";
@@ -134,14 +145,12 @@ export function setupVehicleSettings(container, form) {
   for (const [name, label] of Object.entries(channelNames)) suspension.append(makeGroup(label, channel(name)));
   container.append(makeGroup("車身與重心", body), makeGroup("動力與空力", power), wheels, makeGroup("液壓煞車", brake), suspension);
   const inputs = Array.from(container.querySelectorAll("[data-setting]"));
-  const motionPairs = Object.keys(channelNames).map(name => {
+  for (const name of Object.keys(channelNames)) {
     const prefix = `suspension.channels.${name}`;
     const fixed = suspension.querySelector(`[data-setting="${prefix}.mr_fixed"]`);
     const scale = suspension.querySelector(`[data-setting="${prefix}.mr_scale"]`);
-    const sync = () => { scale.disabled = fixed.value !== ""; };
-    fixed.addEventListener("input", sync);
-    return sync;
-  });
+    fixed.addEventListener("input", () => { scale.disabled = fixed.value !== ""; });
+  }
   const defaults = fetch(new URL("./vehicle-defaults.json", import.meta.url)).then(response => {
     if (!response.ok) throw new Error();
     return response.json();
@@ -182,6 +191,9 @@ export function setupVehicleSettings(container, form) {
       const isMotion = parts.at(-1) === "mr_fixed";
       const readPath = isMotion ? [...parts.slice(0, -1), "mr"] : parts;
       let value = readPath.reduce((object, key) => object?.[key], reference);
+      if (path === "vehicle.front_free_radius_m" || path === "vehicle.rear_free_radius_m") {
+        value ??= reference.vehicle?.free_radius_m;
+      }
       if (path.startsWith("suspension.vehicle.h_rc_")) input.disabled = fixedGeometry.roll_center;
       if (parts[0] === "suspension" && parts[1] === "vehicle" && scale === 100) {
         input.disabled = fixedGeometry.anti;
@@ -203,10 +215,6 @@ export function setupVehicleSettings(container, form) {
   form.addEventListener("change", event => {
     if (["vehicle", "suspension"].includes(event.target.name)) refreshPlaceholders();
   });
-  form.addEventListener("reset", () => queueMicrotask(() => {
-    motionPairs.forEach(sync => sync());
-    refreshPlaceholders();
-  }));
   refreshPlaceholders();
   return () => Object.fromEntries(inputs.filter(input => !input.disabled && input.value !== "").map(input => [
     input.dataset.setting,

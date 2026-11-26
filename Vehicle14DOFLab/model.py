@@ -129,6 +129,9 @@ class Vehicle14DOF:
         self.tires = Tires(source("tire_file"), self._four(cfg, "tire_pressure_kpa", minimum=1.))
         radius_settings = {"free_radius_m": cfg.get("rolling_radius_m", self.tires.unloaded_radius)} | cfg
         self.radius = self._scalar(radius_settings, "free_radius_m", 0.01)
+        axle_radii = dict.fromkeys(("front_free_radius_m", "rear_free_radius_m"), self.radius) | cfg
+        self.free_radii = np.repeat([self._scalar(axle_radii, key, 0.01)
+                                    for key in ("front_free_radius_m", "rear_free_radius_m")], 2)
         gear_ratio = self._scalar(cfg, "gear_ratio", 0.01)
         efficiency = self._scalar(cfg, "gear_efficiency", 0.01, 1.)
         self.motor_rpm_per_wheel_rads = gear_ratio * 60. / (2. * np.pi)
@@ -224,7 +227,7 @@ class Vehicle14DOF:
         state[DOF] = speed
         if speed:
             fz = self.suspension.tire_load(self.trim, np.zeros_like(self.trim), height, ZERO_WHEELS)
-            loaded = tire_working_radius(self.radius, fz, self.suspension.tire_k)
+            loaded = tire_working_radius(self.free_radii, fz, self.suspension.tire_k)
             if np.any(loaded <= 0.):
                 raise ValueError("靜態輪胎壓縮已達自由半徑，請確認輪胎自由半徑與垂向剛性。")
             state[DOF + SPIN.start:] = speed / loaded
@@ -279,7 +282,7 @@ class Vehicle14DOF:
         vertical_accel, fz, _, suspension_force, _ = self.suspension.forces(
             vertical, vertical_rate, (road_height, road_speed, 0., 0.), details=True, include_aero=False,
         )
-        loaded_radius = tire_working_radius(self.radius, fz, self.suspension.tire_k)
+        loaded_radius = tire_working_radius(self.free_radii, fz, self.suspension.tire_k)
 
         # Ackermann road-wheel angles from the commanded equivalent central angle.
         curvature = np.tan(controls.steer_rad) / self.wheelbase
@@ -327,7 +330,7 @@ class Vehicle14DOF:
 
         drive = (self.torque_multiplication * self.drive_scale * controls.throttle
                  * np.maximum(0., self.motor.torque_at(np.abs(omega) * self.motor_rpm_per_wheel_rads)))
-        rolling = self.tires.rolling_resistance(fz, wheel_forward, omega, self.radius)
+        rolling = self.tires.rolling_resistance(fz, wheel_forward, omega, self.free_radii)
         free_torque = drive - loaded_radius * fx + rolling
         brake_limit = self.brake_capacity * controls.brake
         lock_blend = np.maximum(0., 1. - np.abs(omega) / BRAKE_LOCK_SPEED)

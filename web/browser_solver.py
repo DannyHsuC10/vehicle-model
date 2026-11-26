@@ -1,5 +1,6 @@
 """Bridge between the browser worker and the shared 14DOF simulation."""
 
+from copy import deepcopy
 import csv
 import json
 import math
@@ -88,6 +89,26 @@ def apply_settings(vehicle, suspension, overrides):
             target[name] = value
 
 
+def symmetrize_settings(vehicle, suspension):
+    for key in ("wheel_inertia_kg_m2", "tire_pressure_kpa"):
+        values = vehicle[key]
+        if isinstance(values, list) and len(values) == 4:
+            vehicle[key] = [values[0]] * 4
+    for settings, key in ((vehicle, "static_camber_deg"), (vehicle, "drive_scale"),
+                          (vehicle.get("suspension_geometry"), "camber_gain_deg_per_25mm")):
+        values = settings.get(key) if isinstance(settings, dict) else None
+        if isinstance(values, list) and len(values) == 4:
+            settings[key] = [values[0], values[0], values[2], values[2]]
+
+    tires, channels = suspension["tires"], suspension["channels"]
+    for corner in ("FR", "RL", "RR"):
+        for key in ("k", "c"):
+            tires[corner][key] = tires["FL"][key]
+    for left, right in (("FL", "FR"), ("RL", "RR")):
+        tires[right]["mu"] = tires[left]["mu"]
+        channels[right] = deepcopy(channels[left])
+
+
 def snapshot(inputs, uploaded, overrides):
     defaults = read_json(DEFAULT_CONFIG)
     config = defaults | (read_json(uploaded["vehicle"]) if "vehicle" in uploaded else {})
@@ -106,13 +127,13 @@ def snapshot(inputs, uploaded, overrides):
     config["aero"] = aero_settings(config, inputs)
     config.pop("aero_file", None)
     suspension_file = inputs / UPLOADS["suspension"]
-    if overrides:
-        suspension, _ = open_project(suspension_file)
-        apply_settings(config, suspension, overrides)
-        for key, kind in PROFILE_INPUTS.items():
-            config[key] = UPLOADS[kind]
-        config.pop("aero_file", None)
-        write_json(suspension_file, suspension)
+    suspension, _ = open_project(suspension_file)
+    apply_settings(config, suspension, overrides)
+    symmetrize_settings(config, suspension)
+    for key, kind in PROFILE_INPUTS.items():
+        config[key] = UPLOADS[kind]
+    config.pop("aero_file", None)
+    write_json(suspension_file, suspension)
     path = inputs / "vehicle.json"
     write_json(path, config)
     return path
@@ -203,7 +224,7 @@ def run(payload, progress, working_directory):
             "times": times, "timing": timing, "deviation": float(deviation), "warmupEnd": map_start,
             "geometry": {
                 "axles": np.column_stack((vehicle.wheel_x, vehicle.wheel_y)).tolist(),
-                "radius": vehicle.radius, "cgHeight": vehicle.height,
+                "wheelRadii": vehicle.free_radii.tolist(), "cgHeight": vehicle.height,
                 "roadWidth": options.get("width", 3.),
             },
             "series": {key: [float(row[key]) for row in rows] for key in PLOT_COLUMNS},

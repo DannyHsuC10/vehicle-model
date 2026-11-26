@@ -20,7 +20,7 @@ const emptyCourse = [];
 let guides = { straight: { xy: [[0, 0], [75, 0]], length: 75 } };
 let guide = emptyCourse;
 let selectedMode = "skidpad";
-let modeFields = {};
+const modeFields = {};
 let activeJob;
 let worker;
 let result;
@@ -37,7 +37,6 @@ function status(message, tone = "") {
 function updateBusy(busy) {
   byId("run").disabled = busy;
   byId("stop").hidden = !busy;
-  byId("reset").disabled = busy;
 }
 
 function toggleFields(selector, show) {
@@ -239,13 +238,6 @@ form.addEventListener("invalid", event => {
 form.addEventListener("change", event => {
   if (event.target.name === "mode") selectMode(event.target.value);
   if (event.target.name === "track") updateCourse();
-});
-byId("reset").addEventListener("click", () => {
-  form.reset();
-  modeFields = {};
-  selectMode("skidpad", false);
-  progress.value = result ? 100 : 0;
-  status("已重設模擬設定");
 });
 byId("stop").addEventListener("click", () => {
   worker?.terminate();

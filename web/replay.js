@@ -88,7 +88,7 @@ function drawRoad(ctx, segments, project, x, y, yaw) {
 }
 
 function carFaces(geometry, value, project) {
-  const { axles, radius, cgHeight } = geometry;
+  const { axles, wheelRadii, cgHeight } = geometry;
   const front = axles[0][0], rear = axles[2][0];
   const halfTrack = Math.min(axles[0][1], axles[2][1]);
   const roll = radians(value("roll_deg")), pitch = radians(value("pitch_deg"));
@@ -125,6 +125,7 @@ function carFaces(geometry, value, project) {
 
   corners.forEach((corner, index) => {
     const [x, y] = axles[index];
+    const radius = wheelRadii[index];
     const loaded = Math.max(radius * .55, value(`${corner}_rolling_radius_m`));
     const suspensionHub = bodyPoint([x, y, radius - cgHeight])[2] + value(`${corner}_wheel_travel_mm`) / 1000;
     const hub = [x, y, value(`${corner}_fz_n`) > 0 ? loaded : Math.max(loaded, suspensionHub)];
