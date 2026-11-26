@@ -1,0 +1,169 @@
+"""Bridge between the browser worker and the shared 14DOF simulation."""
+
+import csv
+import json
+from pathlib import Path
+from shutil import copyfile
+from tempfile import TemporaryDirectory
+from time import monotonic
+from zipfile import ZIP_DEFLATED, ZipFile
+
+import numpy as np
+
+from Vehicle14DOFLab._vendor.suspension.engine import G
+from Vehicle14DOFLab.aero_setup import aero_settings
+from Vehicle14DOFLab.lap import Driver, Track, simulate_laps
+from Vehicle14DOFLab.model import DEFAULT_CONFIG, Vehicle14DOF
+from Vehicle14DOFLab.plots import write_plots
+from Vehicle14DOFLab.resources import DEFAULT_TRACK, SKIDPAD
+from Vehicle14DOFLab.straight import simulate_straight
+
+
+UPLOADS = {
+    "vehicle": "vehicle.json", "suspension": "suspension.json",
+    "tire": "tire.tir", "motor": "motor.csv", "track": "track.csv",
+    "aero": "aero.json",
+}
+PROFILE_INPUTS = {"suspension_project": "suspension", "tire_file": "tire", "motor_envelope": "motor"}
+PLOT_COLUMNS = (
+    "time_s", "x_m", "y_m", "yaw_deg", "speed_mps", "ax_mps2", "ay_mps2",
+    "heave_mm", "roll_deg", "pitch_deg", "downforce_n", "drag_n",
+    "cop_x_m", "cop_y_m", "cop_z_m", "throttle", "brake",
+) + tuple(
+    f"{corner}_{name}"
+    for name in ("fz_n", "wheel_travel_mm", "slip_ratio", "slip_angle_deg", "drive_nm", "brake_nm")
+    for corner in ("FL", "FR", "RL", "RR")
+)
+
+
+def read_json(path):
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(data, dict):
+        raise ValueError(f"{path.name} 須使用 JSON 物件。")
+    return data
+
+
+def write_json(path, data):
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
+
+
+def write_csv(path, rows):
+    with path.open("w", encoding="utf-8-sig", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def snapshot(inputs, uploaded, overrides):
+    defaults = read_json(DEFAULT_CONFIG)
+    config = defaults | (read_json(uploaded["vehicle"]) if "vehicle" in uploaded else {})
+    for key, kind in PROFILE_INPUTS.items():
+        source = uploaded.get(kind, DEFAULT_CONFIG.parent / defaults[key])
+        copyfile(source, inputs / UPLOADS[kind])
+        config[key] = UPLOADS[kind]
+    aero_file = uploaded.get("aero")
+    config.pop("aero_file", None)
+    if aero_file is not None:
+        config["aero_file"] = aero_file.name
+        copyfile(aero_file, inputs / aero_file.name)
+        aero = config.get("aero", {}).copy()
+        aero.pop("coefficients", None)
+        config["aero"] = aero
+    config["aero"] = aero_settings(config, inputs)
+    config.pop("aero_file", None)
+    for key in ("dc_voltage", "gear_ratio"):
+        if key in overrides:
+            config[key] = overrides[key]
+    if "mass_kg" in overrides:
+        suspension_file = inputs / config["suspension_project"]
+        suspension = read_json(suspension_file)
+        suspension["vehicle"]["m"] = overrides["mass_kg"]
+        write_json(suspension_file, suspension)
+    path = inputs / "vehicle.json"
+    write_json(path, config)
+    return path
+
+
+def run(payload, progress, working_directory):
+    options = json.loads(payload)
+    working_directory = Path(working_directory)
+    uploaded = {
+        key: working_directory / "uploads" / name
+        for key, name in UPLOADS.items() if (working_directory / "uploads" / name).is_file()
+    }
+    mode = options["mode"]
+    if mode not in ("lap", "skidpad", "straight"):
+        raise ValueError("請選擇有效的工況。")
+
+    with TemporaryDirectory() as staging:
+        run_dir = Path(staging)
+        inputs = run_dir / "inputs"
+        inputs.mkdir()
+        vehicle = Vehicle14DOF(snapshot(inputs, uploaded, options.get("overrides", {})))
+        track = None
+        if mode == "straight":
+            length = options["length"]
+            centerline = np.array([[0., 0.], [length, 0.]])
+            case_name = f"{length:g} m straight"
+        else:
+            track_input = SKIDPAD if mode == "skidpad" else uploaded.get("track", DEFAULT_TRACK)
+            copyfile(track_input, inputs / "track.csv")
+            track = Track.from_csv(inputs / "track.csv", width=options["width"])
+            length = float(track.length)
+            centerline = np.vstack((track.xy, track.xy[0]))
+            case_name = options["courseName"]
+
+        total_laps = 1 if track is None else options["laps"] + options["warmup"]
+        last_report = float("-inf")
+
+        def position(lap, time, distance):
+            nonlocal last_report
+            now = monotonic()
+            if now - last_report >= .25:
+                last_report = now
+                progress(lap, total_laps, float(time), float(distance), float(length))
+
+        kwargs = dict(initial_speed=options["initial"] / 3.6, step=options["step"],
+                      time_limit=options["limit"], on_position=position)
+        sources = {"vehicle_config": "inputs/vehicle.json", "suspension_config": "inputs/suspension.json"}
+        if track is None:
+            rows = simulate_straight(vehicle, length, **kwargs)
+            timing = [{
+                "distance_m": length, "elapsed_time_s": rows[-1]["time_s"],
+                "exit_speed_kmh": 3.6 * rows[-1]["speed_mps"], **sources,
+            }]
+            times = [float(rows[-1]["time_s"])]
+            map_start = 0.
+            deviation = max(abs(row["centerline_error_m"]) for row in rows)
+        else:
+            driver = Driver(track, vehicle.wheelbase, max_speed=options["speed"] / 3.6,
+                            lateral_limit=options["lateral"] * G)
+            result = simulate_laps(vehicle, track, driver, laps=options["laps"], warmup_laps=options["warmup"], **kwargs)
+            rows, times = result.telemetry, result.lap_times
+            boundaries = result.timed_boundaries_s
+            map_start, deviation = boundaries[0], result.max_centerline_error_m
+            timing = [{
+                "lap": index + 1, "lap_time_s": lap_time, "start_time_s": boundaries[index],
+                "finish_time_s": boundaries[index + 1], "track_length_m": length, "track_csv": "inputs/track.csv",
+                "track_width_m": options["width"], "target_max_speed_kmh": options["speed"],
+                "target_lateral_accel_mps2": options["lateral"] * G, **sources,
+            } for index, lap_time in enumerate(times)]
+
+        telemetry = run_dir / "telemetry.csv"
+        summary = run_dir / "telemetry_summary.csv"
+        write_csv(telemetry, rows)
+        write_csv(summary, timing)
+        write_plots(telemetry, rows, centerline, case_name, map_start=map_start)
+        write_json(run_dir / "run.json", options)
+        copyfile(telemetry, working_directory / telemetry.name)
+        copyfile(summary, working_directory / summary.name)
+        with ZipFile(working_directory / "run.zip", "w", ZIP_DEFLATED) as archive:
+            for path in sorted(run_dir.rglob("*")):
+                if path.is_file():
+                    archive.write(path, path.relative_to(run_dir).as_posix())
+
+        return json.dumps({
+            "mode": mode, "courseName": case_name, "length": length, "centerline": centerline.tolist(),
+            "times": times, "timing": timing, "deviation": float(deviation), "warmupEnd": map_start,
+            "series": {key: [float(row[key]) for row in rows] for key in PLOT_COLUMNS},
+        }, allow_nan=False, separators=(",", ":"))

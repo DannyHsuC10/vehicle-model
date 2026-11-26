@@ -1,0 +1,44 @@
+name: Deploy Vehicle14DOF web
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - 'Vehicle14DOFLab/**'
+      - '.github/workflows/vehicle14dof-pages.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vehicle14dof-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r Vehicle14DOFLab/requirements.txt
+      - run: python -B web/build.py
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/vehicle14dof
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

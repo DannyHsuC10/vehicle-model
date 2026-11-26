@@ -1,5 +1,7 @@
 # LP03 14 DOF 圈速模擬
 
+網頁版的本機預覽及 GitHub Pages 設定請見 [網頁版說明](../web/README.md)。
+
 ## 桌面工作台
 
 在 Windows 雙擊 [Start-14DOF-GUI.bat](Start-14DOF-GUI.bat)，或在本專案資料夾執行 `py -3 -B run.py --gui`。可將整個資料夾搬到其他位置或重新命名。所需的預設輸入及求解模組分別位於 `input_data/` 和 `_vendor/`。

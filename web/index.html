@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="LP03 十四自由度車輛動態模擬工作台">
+  <meta name="theme-color" content="#0c1118">
+  <title>Vehicle 14DOF Lab</title>
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>Vehicle 14DOF <strong>Lab</strong></div>
+    <span class="top-meta">LP03 車輛動態模擬</span>
+  </header>
+  <main>
+    <div class="page-heading">
+      <div><p class="eyebrow">LP03 / VEHICLE DYNAMICS</p><h1>14 DOF 模擬工作台</h1></div>
+      <div class="engine-label"><span>求解器</span><strong>RK4 <b>·</b> Magic Formula 6.1.2</strong></div>
+    </div>
+    <div class="workbench">
+      <aside class="settings panel">
+        <form id="setup">
+          <div class="section-heading"><h2>模擬設定</h2><button type="button" id="reset" class="quiet">重設</button></div>
+          <fieldset class="mode">
+            <legend>工況</legend>
+            <div class="segments">
+              <label><input type="radio" name="mode" value="lap" checked><span>圈速</span></label>
+              <label><input type="radio" name="mode" value="skidpad"><span>定圓</span></label>
+              <label><input type="radio" name="mode" value="straight"><span>加速</span></label>
+            </div>
+          </fieldset>
+          <div class="course-tile"><span class="course-symbol" aria-hidden="true">⌖</span><div><strong id="course-name">FSAE A 2025</strong><small id="course-meta">封閉賽道</small></div></div>
+          <div class="field-grid">
+            <label data-closed>賽道寬度<span class="input-unit"><input name="width" type="number" min=".01" step="any" value="3" required><span>m</span></span></label>
+            <label data-closed>目標車速<span class="input-unit"><input name="speed" type="number" min=".01" step="any" value="100" required><span>km/h</span></span></label>
+            <label data-straight hidden>直線距離<span class="input-unit"><input name="length" type="number" min=".01" step="any" value="75" required disabled><span>m</span></span></label>
+            <label>起步車速<span class="input-unit"><input name="initial" type="number" min="0" step="any" value="0" required><span>km/h</span></span></label>
+            <label data-closed>側向加速度目標<span class="input-unit"><input name="lateral" type="number" min=".01" step="any" value="2" required><span>g</span></span></label>
+            <label data-closed>計時圈數<span class="input-unit"><input name="laps" type="number" min="1" step="1" value="1" required><span>圈</span></span></label>
+            <label data-closed>暖胎圈數<span class="input-unit"><input name="warmup" type="number" min="0" step="1" value="0" required><span>圈</span></span></label>
+          </div>
+          <details>
+            <summary>車輛參數與輸入檔</summary>
+            <div class="field-grid advanced">
+              <label>整車質量<span class="input-unit"><input name="mass_kg" type="number" min="1" step="any" placeholder="320"><span>kg</span></span></label>
+              <label>匯流排電壓<span class="input-unit"><input name="dc_voltage" type="number" min="1" step="any" placeholder="530"><span>V</span></span></label>
+              <label>減速比<span class="input-unit"><input name="gear_ratio" type="number" min=".01" step="any" placeholder="11.2"></span></label>
+            </div>
+            <p class="field-note">空白欄位沿用匯入檔或 LP03 預設值。</p>
+            <div class="files">
+              <label data-lap>賽道 LINE／ARC CSV<input type="file" name="track" accept=".csv"></label>
+              <label>車輛設定 JSON<input type="file" name="vehicle" accept=".json"></label>
+              <label>懸吊專案 JSON<input type="file" name="suspension" accept=".json"></label>
+              <label>輪胎 TIR<input type="file" name="tire" accept=".tir"></label>
+              <label>馬達曲線 CSV<input type="file" name="motor" accept=".csv"></label>
+              <label>空力係數 JSON<input type="file" name="aero" accept=".json"></label>
+            </div>
+          </details>
+          <details>
+            <summary>積分設定</summary>
+            <div class="field-grid advanced">
+              <label>最大步長<span class="input-unit"><input name="step" type="number" min=".0001" max=".02" step="any" value=".005" required><span>s</span></span></label>
+              <label>時間上限<span class="input-unit"><input name="limit" type="number" min=".001" step="any" value="240" required><span>s</span></span></label>
+            </div>
+          </details>
+          <div class="run-controls">
+            <button type="submit" id="run" class="primary"><span aria-hidden="true">▶</span> 執行模擬</button>
+            <button type="button" id="stop" hidden>停止</button>
+          </div>
+          <progress id="progress" max="100" value="0" aria-label="模擬進度"></progress>
+          <p id="status" class="status" role="status">就緒 · 在瀏覽器執行</p>
+        </form>
+      </aside>
+      <section class="results" aria-label="模擬結果">
+        <div class="metrics">
+          <div class="metric panel"><span id="timing-label">最佳圈速</span><strong id="time">—</strong><small>s</small></div>
+          <div class="metric panel"><span>最高車速</span><strong id="peak-speed">—</strong><small>km/h</small></div>
+          <div class="metric panel"><span>峰值側向加速度</span><strong id="peak-lateral">—</strong><small>g</small></div>
+          <div class="metric panel"><span>工況距離</span><strong id="distance">—</strong><small>m</small></div>
+        </div>
+        <section class="map panel">
+          <div class="section-heading"><div><h2>行駛軌跡</h2><p id="map-caption">FSAE A 2025 · 賽道預覽</p></div><span class="map-tag">俯視</span></div>
+          <div class="map-frame"><canvas id="map" role="img" aria-label="賽道中心線與車輛行駛軌跡"></canvas></div>
+          <div id="map-legend" class="map-legend"><span class="legend-line"></span>賽道中心線 <span class="start-dot"></span>起點<div id="speed-key" hidden><span id="min-speed">0</span><i></i><span id="max-speed">100</span> km/h</div></div>
+          <div class="playback">
+            <button id="play" type="button" disabled>播放</button>
+            <input id="scrub" type="range" min="0" max="1" value="0" step="1" aria-label="回放時間軸" disabled>
+            <output id="play-time" for="scrub">0.00 s</output>
+          </div>
+        </section>
+        <section class="chart panel">
+          <div class="section-heading"><h2>遙測分析</h2><label class="sr-only" for="signal">遙測項目</label>
+            <select id="signal" disabled>
+              <option value="speed">車速</option><option value="accel">加速度</option><option value="attitude">側傾與俯仰</option>
+              <option value="heave">車身升沉</option><option value="loads">四輪輪荷</option><option value="travel">懸吊行程</option>
+              <option value="slip">滑移率</option><option value="angle">側滑角</option><option value="drive">驅動扭矩</option>
+              <option value="brake">煞車扭矩</option><option value="aero">空力</option><option value="cop">空力作用點</option><option value="pedals">油門與煞車</option>
+            </select>
+          </div>
+          <div class="chart-frame"><canvas id="chart" role="img" aria-label="模擬遙測時間圖"></canvas><p id="chart-empty">執行模擬後顯示遙測資料</p></div>
+          <div id="chart-legend" class="chart-legend"></div>
+        </section>
+        <section class="exports panel" id="exports" hidden>
+          <div class="section-heading"><h2>計時與下載</h2></div>
+          <div class="table-scroll"><table><thead id="timing-head"></thead><tbody id="timing-body"></tbody></table></div>
+          <p id="run-deviation" class="field-note"></p>
+          <div class="download-links">
+            <a data-download="telemetry.csv" download="telemetry.csv">遙測 CSV</a>
+            <a data-download="telemetry_summary.csv" download="telemetry_summary.csv">計時 CSV</a>
+            <a data-download="run.zip" download="vehicle14dof-run.zip">完整結果 ZIP</a>
+          </div>
+        </section>
+      </section>
+    </div>
+    <footer><span>Vehicle 14DOF Lab</span><a href="./pacejka-license.txt">Pacejka 授權</a></footer>
+  </main>
+</body>
+</html>
