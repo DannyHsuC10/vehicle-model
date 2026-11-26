@@ -82,6 +82,8 @@ summary::marker { color: var(--accent); }
 .field-note { font-size: .8125rem; color: var(--muted); margin: .6rem 0 0; }
 .track-import { margin-top: 0; }
 .example-link { font-size: .8125rem; justify-self: start; }
+.file-example { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem .5rem; align-items: baseline; }
+.file-example input { grid-column: 1 / -1; }
 .vehicle-settings { border-top: 1px solid var(--line); padding-top: .85rem; }
 .vehicle-settings details { margin-top: .65rem; }
 .vehicle-settings details details { padding-inline-start: .55rem; }

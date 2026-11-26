@@ -64,11 +64,31 @@
             <details>
               <summary>匯入設定與曲線</summary>
               <div class="files">
-                <label>車輛設定 JSON<input type="file" name="vehicle" accept=".json"></label>
-                <label>懸吊專案 JSON<input type="file" name="suspension" accept=".json"></label>
-                <label>輪胎 TIR<input type="file" name="tire" accept=".tir"></label>
-                <label>馬達曲線 CSV<input type="file" name="motor" accept=".csv"></label>
-                <label>空力係數 JSON<input type="file" name="aero" accept=".json"></label>
+                <div class="file-example">
+                  <label for="upload-vehicle">車輛設定 JSON</label>
+                  <a class="example-link" href="./examples/vehicle.json" download aria-label="下載車輛設定 JSON 範例">下載範例</a>
+                  <input id="upload-vehicle" type="file" name="vehicle" accept=".json">
+                </div>
+                <div class="file-example">
+                  <label for="upload-suspension">懸吊專案 JSON</label>
+                  <a class="example-link" href="./examples/suspension.json" download aria-label="下載懸吊專案 JSON 範例">下載範例</a>
+                  <input id="upload-suspension" type="file" name="suspension" accept=".json">
+                </div>
+                <div class="file-example">
+                  <label for="upload-tire">輪胎 TIR</label>
+                  <a class="example-link" href="./examples/tire.tir" download aria-label="下載輪胎 TIR 範例">下載範例</a>
+                  <input id="upload-tire" type="file" name="tire" accept=".tir">
+                </div>
+                <div class="file-example">
+                  <label for="upload-motor">馬達曲線 CSV</label>
+                  <a class="example-link" href="./examples/motor.csv" download aria-label="下載馬達曲線 CSV 範例">下載範例</a>
+                  <input id="upload-motor" type="file" name="motor" accept=".csv">
+                </div>
+                <div class="file-example">
+                  <label for="upload-aero">空力係數 JSON</label>
+                  <a class="example-link" href="./examples/aero.json" download aria-label="下載空力係數 JSON 範例">下載範例</a>
+                  <input id="upload-aero" type="file" name="aero" accept=".json">
+                </div>
               </div>
             </details>
           </section>

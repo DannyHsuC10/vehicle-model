@@ -62,11 +62,19 @@ def apply_settings(vehicle, suspension, overrides):
     curve_scales = {"spring_scale": ("spring",), "damper_scale": ("compression", "rebound"), "mr_scale": ("mr",)}
     for key, value in overrides.items():
         group, *parts = key.split(".")
+        if group == "vehicle" and parts[:2] == ["suspension_geometry", "camber_gain_deg_per_25mm"]:
+            vehicle.setdefault("suspension_geometry", {}).setdefault("camber_gain_deg_per_25mm", [0.] * 4)
         target = roots[group]
         for part in parts[:-1]:
             target = target[int(part)] if isinstance(target, list) else target[part]
         name = int(parts[-1]) if isinstance(target, list) else parts[-1]
-        if parts[:1] == ["channels"] and name in curve_scales:
+        if group == "suspension" and parts[:1] == ["channels"] and name == "mr_fixed":
+            if type(value) not in (int, float) or not math.isfinite(value) or value < 1e-6:
+                raise ValueError("固定運動比須為有限正數，且至少為 0.000001。")
+            target["mr"] = [[0., value]]
+        elif group == "suspension" and parts[:1] == ["channels"] and name in curve_scales:
+            if name == "mr_scale" and f"suspension.channels.{parts[1]}.mr_fixed" in overrides:
+                continue
             if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
                 raise ValueError("懸吊倍率須為有限正數。")
             for curve in curve_scales[name]:

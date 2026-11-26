@@ -48,6 +48,15 @@ def main():
     suspension = json.loads((LAB / "input_data/LP03.json").read_text(encoding="utf-8-sig"))
     defaults = {"vehicle": vehicle, "suspension": suspension}
     (DIST / "vehicle-defaults.json").write_text(json.dumps(defaults, ensure_ascii=False), encoding="utf-8")
+
+    examples = DIST / "examples"
+    examples.mkdir(exist_ok=True)
+    inputs = {"suspension_project": "suspension.json", "tire_file": "tire.tir", "motor_envelope": "motor.csv"}
+    for key, name in inputs.items():
+        copy2(LAB / vehicle[key], examples / name)
+    for name, data in (("vehicle.json", vehicle | inputs), ("aero.json", vehicle["aero"]["coefficients"])):
+        (examples / name).write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
     copy2(LAB / "_vendor/pacejka/LICENSE", DIST / "pacejka-license.txt")
     print(DIST)
 
