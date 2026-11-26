@@ -1,19 +1,19 @@
-# Vehicle 14DOF Lab 網頁版
+# Vehicle 14DOF Lab Web App
 
-網頁使用原本的 Python 14 DOF 模型和 NumPy。Pyodide 在 Web Worker 中執行 9.125 m 定圓、75 m 直線加速及自訂賽道圈速。計算與匯入檔案留在瀏覽器內。首次執行需要連線至 jsDelivr 下載固定版本的 Pyodide 與 NumPy。
+The web app runs the shared Python 14-DOF model and NumPy in a Pyodide Web Worker. It supports a 9.125 m radius skidpad, a 75 m acceleration run, and lap timing on custom tracks. Simulations and imported files stay in your browser. The first run needs access to jsDelivr to download the pinned Pyodide and NumPy versions.
 
 ## GitHub Pages
 
-1. 將本次變更推送到 GitHub 儲存庫。
-2. 在 GitHub 的 **Settings → Pages → Build and deployment → Source** 選擇 **GitHub Actions**。
-3. 在 **Actions → Deploy Vehicle14DOF web** 選擇 **Run workflow**，使用 `main` 分支。之後 `main` 上的相關程式變更會自動建置與部署。
-4. 部署完成後從該次工作流程的 `github-pages` 環境開啟網址。
+1. Push your changes to the GitHub repository.
+2. Under **Settings → Pages → Build and deployment → Source**, select **GitHub Actions**.
+3. Under **Actions → Deploy Vehicle14DOF web**, choose **Run workflow** on `main`. Subsequent changes to the web app or solver on `main` trigger a build and deployment automatically.
+4. When deployment completes, open the site URL from the workflow's `github-pages` environment.
 
-工作流程部署 `dist/vehicle14dof/`，內容包含靜態頁面、求解器原始碼、LP03 預設輸入、定圓範本與 Pacejka 授權。輪胎相關檔案只包含公開示範輪胎和可下載的零值 TIR 範本。匯入自有 TIR 時，瀏覽器會在本機使用該檔，並保留在使用者下載的結果 ZIP 中。桌面版 FSAE 賽道、STL、遙測歷史與測試資料保留在儲存庫。
+The workflow publishes `dist/vehicle14dof/`. The build contains the static site, solver source, LP03 defaults, a sample skidpad CSV, and the Pacejka license. The tire assets include the public demo tire and a downloadable zero-value TIR template. The browser uses any TIR file you import and includes it in the results ZIP. The desktop FSAE track, STL assets, historical telemetry, and test data are available in the repository.
 
-## 本機預覽
+## Local Preview
 
-在儲存庫根目錄執行以下指令，再開啟 <http://127.0.0.1:8000/>。Windows 若已經有專案虛擬環境，可將 `python` 改成 `.\.venv\Scripts\python.exe`。
+Run the following commands from the repository root, then open <http://127.0.0.1:8000/>. On Windows, use `.\.venv\Scripts\python.exe` if you already have a project virtual environment.
 
 ```powershell
 python -m pip install -r Vehicle14DOFLab/requirements.txt
@@ -21,13 +21,13 @@ python -B web/build.py
 python -m http.server 8000 --bind 127.0.0.1 --directory dist/vehicle14dof
 ```
 
-## 輸入與結果
+## Inputs and Results
 
-- 內建定圓半徑為 9.125 m，直線距離固定為 75 m。自訂工況可匯入封閉 LINE／ARC 賽道 CSV。頁面提供可直接匯入的定圓範例，內容為兩段相接的 180° 圓弧。座標、半徑與長度用公尺，起訖角度用度，方向填 `Clockwise` 或 `Counterclockwise`。每段終點須與下一段起點相接。
-- 「車輛設定」可調整車身與重心、動力與空力、四輪、液壓煞車及懸吊，也可匯入桌面版詳細懸吊 JSON。車輛 JSON 引用的懸吊、輪胎、馬達及空力檔案可用各自的欄位提供。頁面上的值優先於匯入檔，留空則沿用匯入檔或 LP03 預設。
-- 「輪胎與輪端」的自轉慣量、胎壓、垂向剛性與垂向阻尼由四輪共用。自由半徑、簧下質量、靜態外傾與驅動倍率按前後軸設定，同軸左右對稱。匯入設定若有差異，四輪共用值採左前輪，其餘輪端數值、Camber Gain 與直推通道採各軸左側。結果 ZIP 保留實際採用的值。
-- 「懸吊與幾何」可設定前後軸 Roll Center 離地高度（mm）、四種 Anti（%）與前後軸 Camber Gain（每 25 mm 壓縮的角度變化）。Roll Center 與 Anti 需啟用傳力，Camber Gain 可單獨生效。匯入絕對值查表時，對應欄位會停用。各通道可直接輸入彈簧剛性（N/mm）和固定運動比，留空會沿用原設定。主簧與 Tender 共用的通道會保留 Tender 並更新主簧剛性。分段剛性或力曲線會改用輸入的固定剛性。剛性作用於已啟用的通道，直推同軸左右共用。
-- 各懸吊通道可分別輸入壓縮與回彈阻尼係數（N·s/m）。輸入值會讓該方向改用固定係數，填 0 可關閉該方向的阻尼，留空則沿用原設定。設定作用於已啟用的通道，直推同軸左右共用。
-- 「匯入設定與曲線」提供車輛、懸吊、空力 JSON 與輪胎 TIR 的零值範本。數值參數以 0 起始，開關預設關閉，檔案版本與格式識別欄位保留。請填入參數後再匯入求解。馬達 CSV 範例使用 `vdc_V,rpm,T_shaft_Nm` 欄位表示多電壓包絡，扭矩為減速前馬達軸端的 N·m。空力係數填在 JSON 最外層，必填 `CL0` 和 `CD0`。
-- 完成後進入駕駛回放。網頁以程式繪製賽車模型，根據遙測更新車身姿態、輪胎轉動與轉向，並同步顯示 G-G 加速度圓、油門、煞車和車速。支援跟車、俯視、0.25× 至 4× 倍速及時間軸。
-- 速度著色軌跡、逐輪遙測與計時可在回放下方查看。完整 ZIP 包含設定快照、使用的輸入、逐點遙測 CSV、計時 CSV 與 SVG。
+- The built-in skidpad has a radius of 9.125 m and the straight is 75 m long. Custom Track accepts a closed LINE/ARC track CSV. The downloadable skidpad example consists of two connected 180° arcs. Use meters for coordinates, radii, and lengths, degrees for start and end angles, and `Clockwise` or `Counterclockwise` for direction. Each segment must connect to the next to form a closed loop.
+- **Vehicle Settings** covers body and center of gravity, powertrain and aerodynamics, tires and wheels, hydraulic brakes, and suspension. You can import a desktop suspension project or provide the files referenced by a vehicle JSON using the suspension, tire, motor, and aerodynamic upload fields. Values entered on the page override the source settings. Blank fields use the uploaded file or LP03 defaults.
+- **Tires and Wheels** shares wheel rotational inertia, tire pressure, vertical stiffness, and vertical damping across all four wheels. Free radius, unsprung mass, static camber, and drive torque scale are set by axle. For imported files, the front-left wheel supplies the shared values. Each axle's left side supplies the other wheel settings, camber gain, and direct-acting suspension settings. The results ZIP contains the effective values.
+- **Suspension and Geometry** covers front and rear roll center heights above the road (mm), anti geometry (%), and camber gain per 25 mm of compression. Roll center and anti geometry require load transfer to be enabled. Camber gain can take effect independently. Imported absolute lookup tables disable the associated fields. Enabled suspension channels accept a spring rate (N/mm) and fixed motion ratio. A spring-rate override adjusts the main spring while retaining any tender spring, or replaces an imported staged or force curve with a fixed rate. Direct-acting settings apply to both sides of the axle.
+- Compression and rebound damping fields show the LP03 reference coefficients (N·s/m) and their speed thresholds. An imported curve shows its source values and units. Leave either field blank to keep the corresponding source curve. Enter a fixed coefficient to override it or enter `0` to disable damping in that direction. Settings apply to enabled channels.
+- **Import Settings and Curves** offers downloadable templates for vehicle, suspension, and aerodynamic JSON files and for tire TIR files. Numeric values start at zero, switches start disabled, and format identifiers and file versions are retained. Fill in your parameters before importing. The sample motor CSV uses `vdc_V,rpm,T_shaft_Nm` for a multi-voltage envelope. Torque is in N·m at the motor shaft before reduction. Put aerodynamic coefficients at the top level of the JSON file and include `CL0` and `CD0`.
+- The driving replay animates the car's body attitude, wheel rotation, and steering from telemetry. It also displays a G–G diagram, pedal inputs, and vehicle speed. Use the follow or overhead view, the playback timeline, and speeds from 0.25× to 4×.
+- Below the replay you can view the speed-colored vehicle path, individual wheel telemetry, and run timing. The results ZIP includes the effective settings, inputs, telemetry CSV, timing CSV, and SVG charts.

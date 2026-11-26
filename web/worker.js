@@ -11,7 +11,7 @@ async function initialize() {
   const [module, archive] = await Promise.all([
     import(runtimeUrl + "pyodide.mjs"),
     fetch(new URL("./solver.zip", import.meta.url)).then(response => {
-      if (!response.ok) throw new Error("無法載入求解器套件。");
+      if (!response.ok) throw new Error("Could not load the solver package.");
       return response.arrayBuffer();
     }),
   ]);
@@ -29,7 +29,7 @@ self.onmessage = async ({ data: { options, files } }) => {
       self.postMessage({ kind: "loading" });
       runtime = initialize().catch(error => {
         runtime = undefined;
-        throw new Error(`無法載入瀏覽器求解器。請確認網路可連至 jsDelivr。 ${error.message}`);
+        throw new Error(`Could not load the browser solver. Check your connection to jsDelivr. ${error.message}`);
       });
     }
     const python = await runtime;
@@ -59,6 +59,11 @@ self.onmessage = async ({ data: { options, files } }) => {
       }
     }
   } catch (error) {
-    self.postMessage({ kind: "error", message: String(error.message || error).trim().split("\n").at(-1) });
+    const detail = String(error.message || error).trim().split("\n").at(-1);
+    const message = /\p{Script=Han}/u.test(detail)
+      ? "The solver could not complete the simulation. Check the imported files and vehicle settings."
+      : detail;
+    console.error(error);
+    self.postMessage({ kind: "error", message });
   }
 };

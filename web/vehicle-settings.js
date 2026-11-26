@@ -1,75 +1,77 @@
 const body = [
-  ["suspension.vehicle.m", "整車質量", "kg", 1],
-  ["suspension.vehicle.h_cg", "重心高度", "m", 0],
-  ["suspension.vehicle.lf", "重心至前軸", "m", .01],
-  ["suspension.vehicle.lr", "重心至後軸", "m", .01],
-  ["suspension.vehicle.tf", "前輪距", "m", .01],
-  ["suspension.vehicle.tr", "後輪距", "m", .01],
-  ["suspension.vehicle.Ixx", "側傾慣量", "kg·m²", .01],
-  ["suspension.vehicle.Iyy", "俯仰慣量", "kg·m²", .01],
-  ["vehicle.yaw_inertia_kg_m2", "偏航慣量", "kg·m²", .01],
+  ["suspension.vehicle.m", "Total Vehicle Mass", "kg", 1],
+  ["suspension.vehicle.h_cg", "CG Height", "m", 0],
+  ["suspension.vehicle.lf", "CG to Front Axle", "m", .01],
+  ["suspension.vehicle.lr", "CG to Rear Axle", "m", .01],
+  ["suspension.vehicle.tf", "Front Track Width", "m", .01],
+  ["suspension.vehicle.tr", "Rear Track Width", "m", .01],
+  ["suspension.vehicle.Ixx", "Roll Inertia", "kg·m²", .01],
+  ["suspension.vehicle.Iyy", "Pitch Inertia", "kg·m²", .01],
+  ["vehicle.yaw_inertia_kg_m2", "Yaw Inertia", "kg·m²", .01],
 ];
 
 const power = [
-  ["vehicle.dc_voltage", "匯流排電壓", "V", 1],
-  ["vehicle.gear_ratio", "減速比", "", .01],
-  ["vehicle.gear_efficiency", "傳動效率", "", .01, 1],
-  ["vehicle.aero.enabled", "啟用空力", "", null, null, true],
-  ["vehicle.aero.coefficients.CL0", "模態基準 CL", ""],
-  ["vehicle.aero.coefficients.CD0", "模態基準 CD", ""],
-  ["vehicle.aero.coefficients.front_balance", "模態前軸下壓比例", "", 0, 1],
+  ["vehicle.dc_voltage", "DC Bus Voltage", "V", 1],
+  ["vehicle.gear_ratio", "Gear Reduction Ratio", "", .01],
+  ["vehicle.gear_efficiency", "Drivetrain Efficiency", "", .01, 1],
+  ["vehicle.aero.enabled", "Enable Aerodynamics", "", null, null, true],
+  ["vehicle.aero.coefficients.CL0", "Baseline Modal CL", ""],
+  ["vehicle.aero.coefficients.CD0", "Baseline Modal CD", ""],
+  ["vehicle.aero.coefficients.front_balance", "Modal Front Downforce Share", "", 0, 1],
 ];
 
 const brake = [
-  ["vehicle.max_pedal_force_n", "最大踏板力", "N", 0],
-  ["vehicle.front_brake_bias", "前軸平衡桿比例", "", 0, 1],
-  ["vehicle.hydraulic_brake.pedal_ratio", "踏板比", "", .01],
-  ["vehicle.hydraulic_brake.pad_mu", "來令片摩擦係數", "", 0],
+  ["vehicle.max_pedal_force_n", "Max. Pedal Force", "N", 0],
+  ["vehicle.front_brake_bias", "Front Balance Bar Split", "", 0, 1],
+  ["vehicle.hydraulic_brake.pedal_ratio", "Pedal Ratio", "", .01],
+  ["vehicle.hydraulic_brake.pad_mu", "Pad Friction Coefficient", "", 0],
   ...["front", "rear"].flatMap((axle, index) => {
-    const label = index === 0 ? "前" : "後";
+    const label = index === 0 ? "Front" : "Rear";
     return [
-      [`vehicle.hydraulic_brake.${axle}_master_diameter_m`, `${label}總泵直徑`, "m", .001],
-      [`vehicle.hydraulic_brake.${axle}_caliper_diameter_m`, `${label}卡鉗活塞直徑`, "m", .001],
-      [`vehicle.hydraulic_brake.${axle}_disc_diameter_m`, `${label}碟盤有效直徑`, "m", .001],
-      [`vehicle.hydraulic_brake.${axle}_pistons`, `${label}卡鉗活塞數`, "", 1, null, false, 1],
+      [`vehicle.hydraulic_brake.${axle}_master_diameter_m`, `${label} Master Cylinder Bore`, "m", .001],
+      [`vehicle.hydraulic_brake.${axle}_caliper_diameter_m`, `${label} Caliper Piston Diameter`, "m", .001],
+      [`vehicle.hydraulic_brake.${axle}_disc_diameter_m`, `${label} Effective Disc Diameter`, "m", .001],
+      [`vehicle.hydraulic_brake.${axle}_pistons`, `${label} Caliper Piston Count`, "", 1, null, false, 1],
     ];
   }),
 ];
 
 const axles = [
-  { end: "front", label: "前輪", corner: "FL", index: 0 },
-  { end: "rear", label: "後輪", corner: "RL", index: 2 },
+  { end: "front", label: "Front Wheels", corner: "FL", index: 0 },
+  { end: "rear", label: "Rear Wheels", corner: "RL", index: 2 },
 ];
 const sharedWheels = [
-  ["vehicle.tire_pressure_kpa.0", "胎壓", "kPa", 1],
-  ["vehicle.wheel_inertia_kg_m2.0", "自轉慣量", "kg·m²", .01],
-  ["suspension.tires.FL.k", "垂向剛性", "N/mm", .01],
-  ["suspension.tires.FL.c", "垂向阻尼", "N·s/m", 0],
+  ["vehicle.tire_pressure_kpa.0", "Tire Pressure", "kPa", 1],
+  ["vehicle.wheel_inertia_kg_m2.0", "Wheel Rotational Inertia", "kg·m²", .01],
+  ["suspension.tires.FL.k", "Vertical Stiffness", "N/mm", .01],
+  ["suspension.tires.FL.c", "Vertical Damping", "N·s/m", 0],
 ];
 
 function wheel({ end, corner, index }) {
   return [
-    [`vehicle.${end}_free_radius_m`, "自由半徑", "m", .01],
-    [`vehicle.static_camber_deg.${index}`, "靜態外傾", "°", -20, 20],
-    [`vehicle.drive_scale.${index}`, "驅動倍率", "", 0, 1],
-    [`suspension.tires.${corner}.mu`, "簧下質量", "kg", .01],
+    [`vehicle.${end}_free_radius_m`, "Free Radius", "m", .01],
+    [`vehicle.static_camber_deg.${index}`, "Static Camber", "°", -20, 20],
+    [`vehicle.drive_scale.${index}`, "Drive Torque Scale", "", 0, 1],
+    [`suspension.tires.${corner}.mu`, "Unsprung Mass", "kg", .01],
   ];
 }
 
 const channelNames = {
-  heave_f: "前軸升沉", heave_r: "後軸升沉", roll_f: "前軸側傾", roll_r: "後軸側傾",
-  FL: "前軸直推", RL: "後軸直推",
+  heave_f: "Front Heave", heave_r: "Rear Heave", roll_f: "Front Roll", roll_r: "Rear Roll",
+  FL: "Front Direct-Acting", RL: "Rear Direct-Acting",
 };
+const dampingDirections = { compression_coefficient: "compression", rebound_coefficient: "rebound" };
+const dampingNumber = new Intl.NumberFormat("en", { maximumSignificantDigits: 5 });
 
 function channel(name) {
   return [
-    [`suspension.channels.${name}.main_rate`, "彈簧／主簧剛性", "N/mm", 0],
-    [`suspension.channels.${name}.mr_fixed`, "固定運動比", "", .000001],
-    [`suspension.channels.${name}.compression_coefficient`, "壓縮阻尼係數", "N·s/m", 0],
-    [`suspension.channels.${name}.rebound_coefficient`, "回彈阻尼係數", "N·s/m", 0],
-    [`suspension.channels.${name}.jounce_mm`, "觸底行程", "mm", 0],
-    [`suspension.channels.${name}.rebound_mm`, "伸長限位", "mm", 0],
-    [`suspension.channels.${name}.rebound_rate`, "伸長限位剛性", "N/mm", 0],
+    [`suspension.channels.${name}.main_rate`, "Main Spring Rate", "N/mm", 0],
+    [`suspension.channels.${name}.mr_fixed`, "Fixed Motion Ratio", "", .000001],
+    [`suspension.channels.${name}.compression_coefficient`, "Compression Damping", "N·s/m", 0],
+    [`suspension.channels.${name}.rebound_coefficient`, "Rebound Damping", "N·s/m", 0],
+    [`suspension.channels.${name}.jounce_mm`, "Bump Stop Travel", "mm", 0],
+    [`suspension.channels.${name}.rebound_mm`, "Rebound Limit", "mm", 0],
+    [`suspension.channels.${name}.rebound_rate`, "Rebound Stop Rate", "N/mm", 0],
   ];
 }
 
@@ -83,7 +85,7 @@ function makeFields(specifications) {
     input.dataset.setting = key;
     if (displayScale) input.dataset.displayScale = displayScale;
     if (boolean) {
-      input.append(new Option("沿用設定", ""), new Option("啟用", "true"), new Option("停用", "false"));
+      input.append(new Option("Use Source Setting", ""), new Option("Enabled", "true"), new Option("Disabled", "false"));
       label.append(input);
     } else {
       input.type = "number";
@@ -99,6 +101,13 @@ function makeFields(specifications) {
         wrapper.append(suffix);
       }
       label.append(wrapper);
+      if (dampingDirections[key.split(".").at(-1)]) {
+        const hint = document.createElement("small");
+        hint.className = "damper-reference";
+        hint.id = `${key}-reference`;
+        input.setAttribute("aria-describedby", hint.id);
+        label.append(hint);
+      }
     }
     grid.append(label);
   }
@@ -114,40 +123,40 @@ function makeGroup(title, specifications) {
 }
 
 export function setupVehicleSettings(container, form) {
-  const wheels = makeGroup("輪胎與輪端（左右對稱）", sharedWheels);
+  const wheels = makeGroup("Tires and Wheels (Left–Right Symmetric)", sharedWheels);
   const wheelNote = document.createElement("p");
   wheelNote.className = "field-note";
-  wheelNote.textContent = "上方四項由四輪共用。匯入的設定若有差異，共用值採左前輪，同軸值採該軸左輪。";
+  wheelNote.textContent = "All four wheels share the settings above. For imported data, shared settings use the front-left wheel and axle settings use the left wheel of each axle.";
   wheels.append(wheelNote);
   axles.forEach(axle => wheels.append(makeGroup(axle.label, wheel(axle))));
-  const suspension = makeGroup("懸吊與幾何", [
-    ["vehicle.suspension_geometry.load_transfer_enabled", "Roll Center／Anti 傳力", "", null, null, true],
-    ["suspension.vehicle.h_rc_f", "前 Roll Center 高度", "mm", -10000, 10000, false, "any", 1000],
-    ["suspension.vehicle.h_rc_r", "後 Roll Center 高度", "mm", -10000, 10000, false, "any", 1000],
-    ["suspension.vehicle.dive_front", "煞車前 Anti-dive", "%", -200, 200, false, "any", 100],
-    ["suspension.vehicle.lift_rear", "煞車後 Anti-lift", "%", -200, 200, false, "any", 100],
-    ["suspension.vehicle.lift_front", "加速前 Anti-lift", "%", -200, 200, false, "any", 100],
-    ["suspension.vehicle.squat_rear", "加速後 Anti-squat", "%", -200, 200, false, "any", 100],
+  const suspension = makeGroup("Suspension and Geometry", [
+    ["vehicle.suspension_geometry.load_transfer_enabled", "Roll Center and Anti Load Transfer", "", null, null, true],
+    ["suspension.vehicle.h_rc_f", "Front Roll Center Height", "mm", -10000, 10000, false, "any", 1000],
+    ["suspension.vehicle.h_rc_r", "Rear Roll Center Height", "mm", -10000, 10000, false, "any", 1000],
+    ["suspension.vehicle.dive_front", "Front Anti-Dive Under Braking", "%", -200, 200, false, "any", 100],
+    ["suspension.vehicle.lift_rear", "Rear Anti-Lift Under Braking", "%", -200, 200, false, "any", 100],
+    ["suspension.vehicle.lift_front", "Front Anti-Lift Under Acceleration", "%", -200, 200, false, "any", 100],
+    ["suspension.vehicle.squat_rear", "Rear Anti-Squat Under Acceleration", "%", -200, 200, false, "any", 100],
   ]);
   const geometryNote = document.createElement("p");
   geometryNote.className = "field-note";
-  geometryNote.textContent = "啟用傳力後會使用 Roll Center 與 Anti。Roll Center 為離地高度，Anti 為全車載重轉移百分比。";
-  const camber = makeGroup("Camber Gain（每 25 mm 壓縮）", axles.map(({ label, index }) => [
+  geometryNote.textContent = "Enable load transfer to apply roll center and anti geometry. Roll center height is measured from the road. Anti values are percentages of total vehicle load transfer.";
+  const camber = makeGroup("Camber Gain (per 25 mm of Compression)", axles.map(({ label, index }) => [
     `vehicle.suspension_geometry.camber_gain_deg_per_25mm.${index}`, label, "°", -30, 30,
   ]));
   const camberNote = document.createElement("p");
   camberNote.className = "field-note";
-  camberNote.textContent = "負值代表懸吊壓縮時輪頂往車內傾。";
+  camberNote.textContent = "Negative values tilt the top of the wheel inward under compression.";
   camber.append(camberNote);
   const tableNote = document.createElement("p");
   tableNote.className = "field-note";
   tableNote.hidden = true;
   const springNote = document.createElement("p");
   springNote.className = "field-note";
-  springNote.textContent = "輸入彈簧剛性可調整主簧或取代彈簧查表。壓縮與回彈各可改用固定阻尼係數。設定只作用於已啟用的通道，留空則沿用原設定。";
+  springNote.textContent = "A spring rate adjusts the main spring or replaces its lookup table. Enter a fixed damping coefficient for either direction, or leave it blank to keep the reference curve. Settings apply to enabled channels.";
   suspension.append(geometryNote, tableNote, camber, springNote);
   for (const [name, label] of Object.entries(channelNames)) suspension.append(makeGroup(label, channel(name)));
-  container.append(makeGroup("車身與重心", body), makeGroup("動力與空力", power), wheels, makeGroup("液壓煞車", brake), suspension);
+  container.append(makeGroup("Body and Center of Gravity", body), makeGroup("Powertrain and Aerodynamics", power), wheels, makeGroup("Hydraulic Brakes", brake), suspension);
   const inputs = Array.from(container.querySelectorAll("[data-setting]"));
   const defaults = fetch(new URL("./vehicle-defaults.json", import.meta.url)).then(response => {
     if (!response.ok) throw new Error();
@@ -169,6 +178,7 @@ export function setupVehicleSettings(container, form) {
     }));
     if (version !== versions) return;
     const reference = Object.fromEntries(profiles);
+    const defaultSuspension = reference.suspension?.channels === settings.suspension?.channels;
     const tables = reference.vehicle?.suspension_geometry?.tables;
     const fixedGeometry = {
       roll_center: !!tables?.roll_center && !tables.roll_center.relative,
@@ -180,7 +190,7 @@ export function setupVehicleSettings(container, form) {
     if (fixedGeometry.anti) locked.push("Anti");
     if (fixedGeometry.camber) locked.push("Camber Gain");
     tableNote.hidden = !locked.length;
-    tableNote.textContent = locked.length ? `匯入的查表已接管 ${locked.join("、")}。` : "";
+    tableNote.textContent = locked.length ? `Imported lookup tables control ${locked.join(", ")}.` : "";
     for (const input of inputs) {
       const path = input.dataset.setting;
       const parts = path.split(".");
@@ -188,7 +198,7 @@ export function setupVehicleSettings(container, form) {
       const isCamber = parts.includes("camber_gain_deg_per_25mm");
       const isMotion = parts.at(-1) === "mr_fixed";
       const isSpring = parts.at(-1) === "main_rate";
-      const direction = { compression_coefficient: "compression", rebound_coefficient: "rebound" }[parts.at(-1)];
+      const direction = dampingDirections[parts.at(-1)];
       const readPath = isMotion ? [...parts.slice(0, -1), "mr"] : parts;
       let value = readPath.reduce((object, key) => object?.[key], reference);
       if (path === "vehicle.front_free_radius_m" || path === "vehicle.rear_free_radius_m") {
@@ -202,19 +212,37 @@ export function setupVehicleSettings(container, form) {
         input.disabled = fixedGeometry.camber;
         value ??= 0;
       }
-      if (isMotion) value = value?.length > 1 ? "沿用曲線" : value?.[0]?.[1];
+      if (isMotion) value = value?.length > 1 ? "Use Source Curve" : value?.[0]?.[1];
       if (isSpring) {
         const kind = reference.suspension?.channels?.[parts[2]]?.spring_kind;
         input.min = kind === "tender" ? .000001 : 0;
-        if (kind === "stages" || kind === "force") value = "沿用曲線";
+        if (kind === "stages" || kind === "force") value = "Use Source Curve";
       }
       if (direction) {
-        const channel = reference.suspension?.channels?.[parts[2]];
+        const name = parts[2];
+        const channel = reference.suspension?.channels?.[name];
         const curve = channel?.[direction];
-        if (curve?.length) value = !channel.damper_ratio && curve.length === 1 ? curve[0][1] : "沿用設定";
+        const hint = input.closest("label").querySelector(".damper-reference");
+        hint.textContent = "";
+        if (Array.isArray(curve) && curve.length) {
+          const critical = defaultSuspension ? settings.critical_damping?.[name] : undefined;
+          const ratio = channel.damper_ratio && critical == null;
+          const force = (channel.damper_kind?.[direction] ?? channel.damper_kind) === "force";
+          const unit = force ? "N" : "N·s/m";
+          const values = curve.slice(0, 2)
+            .filter(row => Array.isArray(row) && row.length === 2 && row.every(Number.isFinite))
+            .map(([speed, raw]) => {
+              const amount = dampingNumber.format(raw * (critical ?? 1));
+              const damping = ratio ? `ζ ${amount}` : `${amount} ${unit}`;
+              return curve.length === 1 ? damping : `${damping} ${force ? "at" : "from"} ${dampingNumber.format(speed)} m/s`;
+            });
+          if (curve.length > 2) values.push(`+${curve.length - 2} more`);
+          if (values.length) hint.textContent = `${defaultSuspension ? "LP03 default" : "Imported"}: ${values.join(" · ")}`;
+          if (values.length && !force && !ratio && curve.length === 1) value = curve[0][1] * (critical ?? 1);
+        }
       }
       if (input.tagName === "SELECT") {
-        input.options[0].textContent = typeof value === "boolean" ? `沿用設定（${value ? "啟用" : "停用"}）` : "沿用設定";
+        input.options[0].textContent = typeof value === "boolean" ? `Use Source Setting (${value ? "Enabled" : "Disabled"})` : "Use Source Setting";
       } else {
         input.placeholder = value == null ? ""
           : String(typeof value === "number" ? Number((value * scale).toPrecision(7)) : value);

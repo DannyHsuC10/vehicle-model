@@ -6,9 +6,9 @@ const byId = id => document.getElementById(id);
 const form = byId("setup");
 const field = name => form.elements.namedItem(name);
 const modes = {
-  skidpad: { name: "9.125 m 定圓", description: "固定半徑", fields: { initial: 25.2, lateral: 5.5 / 9.81, warmup: 1 } },
-  straight: { name: "75 m 直線加速", description: "全油門", fields: { initial: 0 } },
-  custom: { name: "自訂賽道", description: "匯入封閉 LINE／ARC CSV", fields: { initial: 0, lateral: 5.5 / 9.81, warmup: 0 } },
+  skidpad: { name: "9.125 m Skidpad", description: "Fixed Radius", fields: { initial: 25.2, lateral: 5.5 / 9.81, warmup: 1 } },
+  straight: { name: "75 m Straight-Line Acceleration", description: "Full Throttle", fields: { initial: 0 } },
+  custom: { name: "Custom Track", description: "Import a closed LINE/ARC track CSV", fields: { initial: 0, lateral: 5.5 / 9.81, warmup: 0 } },
 };
 const fileFields = ["vehicle", "suspension", "tire", "motor", "track", "aero"];
 const vehicleSettings = setupVehicleSettings(byId("vehicle-fields"), form);
@@ -59,7 +59,7 @@ function updateCourse() {
   byId("course-meta").textContent = length > 0
     ? `${modes[mode].description} · ${length.toFixed(2)} m` : modes[mode].description;
   if (!result) {
-    byId("timing-label").textContent = mode === "straight" ? "加速時間" : "最佳圈速";
+    byId("timing-label").textContent = mode === "straight" ? "Elapsed Time" : "Best Lap";
     byId("distance").textContent = length > 0 ? length.toFixed(2) : "—";
     byId("map-caption").textContent = courseName(mode);
   }
@@ -101,7 +101,7 @@ function seek(index) {
 function pause() {
   if (animation) cancelAnimationFrame(animation);
   animation = 0;
-  byId("play").textContent = "播放";
+  byId("play").textContent = "Play";
 }
 
 function play() {
@@ -111,7 +111,7 @@ function play() {
   if (cursor === times.length - 1) seek(0);
   const startTime = times[cursor], started = performance.now(), rate = Number(byId("play-rate").value);
   let index = cursor;
-  byId("play").textContent = "暫停";
+  byId("play").textContent = "Pause";
   function tick(now) {
     const time = startTime + rate * (now - started) / 1000;
     while (index + 1 < times.length && times[index + 1] <= time) index++;
@@ -140,23 +140,23 @@ function showResult(data, downloads) {
   const straight = data.mode === "straight";
   const [slowest, fastest] = extent(data.series.speed_mps);
   const [lateralMin, lateralMax] = extent(data.series.ay_mps2);
-  byId("timing-label").textContent = straight ? "加速時間" : "最佳圈速";
+  byId("timing-label").textContent = straight ? "Elapsed Time" : "Best Lap";
   byId("time").textContent = extent(data.times)[0].toFixed(3);
   byId("peak-speed").textContent = (3.6 * fastest).toFixed(2);
   byId("peak-lateral").textContent = (Math.max(-lateralMin, lateralMax) / 9.81).toFixed(2);
   byId("distance").textContent = data.length.toFixed(2);
-  byId("map-caption").textContent = `${data.courseName} · 模擬結果`;
+  byId("map-caption").textContent = `${data.courseName} · Simulation Results`;
   byId("min-speed").textContent = (3.6 * slowest).toFixed(1);
   byId("max-speed").textContent = (3.6 * fastest).toFixed(1);
   byId("results").removeAttribute("data-empty");
   byId("map-legend").hidden = byId("replay-controls").disabled = byId("signal").disabled = false;
   byId("scrub").max = data.series.time_s.length - 1;
   byId("timing-head").replaceChildren(tableRow(straight
-    ? ["距離 (m)", "時間 (s)", "終速 (km/h)"] : ["計時圈", "圈速 (s)", "起點 (s)", "終點 (s)"], "th"));
+    ? ["Distance (m)", "Time (s)", "Finish Speed (km/h)"] : ["Timed Lap", "Lap Time (s)", "Start (s)", "Finish (s)"], "th"));
   byId("timing-body").replaceChildren(...data.timing.map(row => tableRow(straight
     ? [row.distance_m.toFixed(2), row.elapsed_time_s.toFixed(3), row.exit_speed_kmh.toFixed(2)]
     : [row.lap, row.lap_time_s.toFixed(3), row.start_time_s.toFixed(3), row.finish_time_s.toFixed(3)], "td")));
-  byId("run-deviation").textContent = `最大中心線偏差 ${data.deviation.toFixed(3)} m`;
+  byId("run-deviation").textContent = `Maximum centerline deviation: ${data.deviation.toFixed(3)} m`;
   downloadUrls.forEach(url => URL.revokeObjectURL(url));
   downloadUrls = [];
   for (const link of document.querySelectorAll("[data-download]")) {
@@ -182,24 +182,24 @@ function createWorker() {
   const instance = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
   instance.onmessage = ({ data }) => {
     if (worker !== instance || !activeJob) return;
-    if (data.kind === "loading") status("正在下載 Python 與 NumPy…");
-    if (data.kind === "solving") status("正在載入車輛並求解初始平衡…");
+    if (data.kind === "loading") status("Downloading Python and NumPy…");
+    if (data.kind === "solving") status("Loading the vehicle and solving for initial equilibrium…");
     if (data.kind === "progress") {
       progress.value = 100 * Math.min(.999, Math.max(0, data.distance / (data.length * data.total)));
-      const stage = activeJob.mode === "straight" ? "直線加速" : `第 ${data.lap} / ${data.total} 圈`;
-      status(`${stage} · ${progress.value.toFixed(1)}% · 模擬 ${data.time.toFixed(1)} s`);
+      const stage = activeJob.mode === "straight" ? "Straight-Line Acceleration" : `Lap ${data.lap} of ${data.total}`;
+      status(`${stage} · ${progress.value.toFixed(1)}% · ${data.time.toFixed(1)} s simulated`);
     }
     if (data.kind === "result") {
       showResult(data.result, data.downloads);
-      finish("模擬完成", "success");
+      finish("Simulation complete", "success");
     }
-    if (data.kind === "error") finish(`模擬失敗 · ${data.message}`, "error");
+    if (data.kind === "error") finish(`Simulation failed · ${data.message}`, "error");
   };
   instance.onerror = () => {
     if (worker !== instance) return;
     instance.terminate();
     worker = undefined;
-    finish("無法啟動求解器。請以 HTTP 或 HTTPS 開啟網頁。", "error");
+    finish("Could not start the solver. Open this page over HTTP or HTTPS.", "error");
   };
   return instance;
 }
@@ -214,7 +214,7 @@ form.addEventListener("submit", async event => {
   activeJob = job;
   updateBusy(true);
   progress.value = 0;
-  status("正在準備輸入…");
+  status("Preparing inputs…");
   try {
     const files = {};
     for (const key of fileFields) {
@@ -226,7 +226,7 @@ form.addEventListener("submit", async event => {
     worker ??= createWorker();
     worker.postMessage({ options: job, files: contents }, Object.values(contents));
   } catch (error) {
-    if (activeJob === job) finish(`無法執行 · ${error.message}`, "error");
+    if (activeJob === job) finish(`Could not run the simulation · ${error.message}`, "error");
   }
 });
 
@@ -242,7 +242,7 @@ form.addEventListener("change", event => {
 byId("stop").addEventListener("click", () => {
   worker?.terminate();
   worker = undefined;
-  finish("模擬已停止");
+  finish("Simulation stopped");
 });
 exportData.addEventListener("click", () => downloadZip.click());
 byId("signal").addEventListener("change", redraw);
@@ -264,7 +264,7 @@ resize.observe(byId("vehicle-scene").parentElement);
 resize.observe(byId("gg-diagram"));
 selectMode(field("mode").value, false);
 fetch(new URL("./courses.json", import.meta.url)).then(response => {
-  if (!response.ok) throw new Error("工況資料載入失敗。");
+  if (!response.ok) throw new Error("Could not load course data.");
   return response.json();
 }).then(data => {
   courses = data;

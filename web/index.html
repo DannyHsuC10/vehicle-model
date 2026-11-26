@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="zh-Hant">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="LP03 十四自由度車輛動態模擬工作台">
+  <meta name="description" content="LP03 14-DOF vehicle dynamics simulator">
   <meta name="theme-color" content="#111d31">
   <title>Vehicle 14DOF Lab</title>
   <link rel="icon" type="image/svg+xml" sizes="any" href="./favicon.svg">
@@ -14,83 +14,83 @@
   <header class="topbar">
     <div class="frame header-row">
       <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>Vehicle 14DOF Lab</div>
-      <button type="button" id="export-data" class="header-export" disabled>輸出資料檔案</button>
+      <button type="button" id="export-data" class="header-export" disabled>Export Results</button>
     </div>
   </header>
   <main class="frame">
     <div class="page-heading">
-      <h1>14 DOF 模擬工作台</h1>
-      <div class="engine-label"><span>求解器</span><strong>RK4 · Magic Formula 6.1.2</strong></div>
+      <h1>14-DOF Simulation Workbench</h1>
+      <div class="engine-label"><span>Solver</span><strong>RK4 · Magic Formula 6.1.2</strong></div>
     </div>
     <div class="workbench">
       <aside class="settings panel" aria-labelledby="settings-title" tabindex="0">
         <form id="setup">
-          <h2 id="settings-title">模擬設定</h2>
+          <h2 id="settings-title">Simulation Setup</h2>
           <fieldset class="mode">
-            <legend>工況</legend>
+            <legend>Test Mode</legend>
             <div class="segments">
-              <label><input type="radio" name="mode" value="skidpad" checked><span>定圓</span></label>
-              <label><input type="radio" name="mode" value="straight"><span>加速</span></label>
-              <label><input type="radio" name="mode" value="custom"><span>匯入賽道</span></label>
+              <label><input type="radio" name="mode" value="skidpad" checked><span>Skidpad</span></label>
+              <label><input type="radio" name="mode" value="straight"><span>Acceleration</span></label>
+              <label><input type="radio" name="mode" value="custom"><span>Custom Track</span></label>
             </div>
           </fieldset>
-          <div class="course-tile"><span class="course-symbol" aria-hidden="true">⌖</span><div><strong id="course-name">9.125 m 定圓</strong><small id="course-meta">固定半徑</small></div></div>
+          <div class="course-tile"><span class="course-symbol" aria-hidden="true">⌖</span><div><strong id="course-name">9.125 m Skidpad</strong><small id="course-meta">Fixed Radius</small></div></div>
           <div class="files track-import" id="track-import" hidden>
-            <label>封閉 LINE／ARC 賽道 CSV<input type="file" name="track" accept=".csv" required disabled></label>
+            <label>Closed LINE/ARC Track CSV<input type="file" name="track" accept=".csv" required disabled></label>
           </div>
-          <a class="example-link" href="./skidpad-example.csv" download>下載 9.125 m 定圓範例 CSV</a>
+          <a class="example-link" href="./skidpad-example.csv" download>Download the 9.125 m Skidpad CSV</a>
           <div class="field-grid">
-            <label data-closed>賽道寬度<span class="input-unit"><input name="width" type="number" min=".01" step="any" value="3" required><span>m</span></span></label>
-            <label data-closed>目標車速<span class="input-unit"><input name="speed" type="number" min=".01" step="any" value="100" required><span>km/h</span></span></label>
-            <label>起步車速<span class="input-unit"><input name="initial" type="number" min="0" step="any" value="0" required><span>km/h</span></span></label>
-            <label data-closed>側向加速度目標<span class="input-unit"><input name="lateral" type="number" min=".01" step="any" value="2" required><span>g</span></span></label>
-            <label data-closed>計時圈數<span class="input-unit"><input name="laps" type="number" min="1" step="1" value="1" required><span>圈</span></span></label>
-            <label data-closed>暖胎圈數<span class="input-unit"><input name="warmup" type="number" min="0" step="1" value="0" required><span>圈</span></span></label>
+            <label data-closed>Track Width<span class="input-unit"><input name="width" type="number" min=".01" step="any" value="3" required><span>m</span></span></label>
+            <label data-closed>Target Speed<span class="input-unit"><input name="speed" type="number" min=".01" step="any" value="100" required><span>km/h</span></span></label>
+            <label>Initial Speed<span class="input-unit"><input name="initial" type="number" min="0" step="any" value="0" required><span>km/h</span></span></label>
+            <label data-closed>Target Lateral Acceleration<span class="input-unit"><input name="lateral" type="number" min=".01" step="any" value="2" required><span>g</span></span></label>
+            <label data-closed>Timed Laps<span class="input-unit"><input name="laps" type="number" min="1" step="1" value="1" required></span></label>
+            <label data-closed>Warm-Up Laps<span class="input-unit"><input name="warmup" type="number" min="0" step="1" value="0" required></span></label>
           </div>
           <details>
-            <summary>積分設定</summary>
+            <summary>Integration Settings</summary>
             <div class="field-grid advanced">
-              <label>最大步長<span class="input-unit"><input name="step" type="number" min=".0001" max=".02" step="any" value=".005" required><span>s</span></span></label>
-              <label>時間上限<span class="input-unit"><input name="limit" type="number" min=".001" step="any" value="240" required><span>s</span></span></label>
+              <label>Maximum Time Step<span class="input-unit"><input name="step" type="number" min=".0001" max=".02" step="any" value=".005" required><span>s</span></span></label>
+              <label>Time Limit<span class="input-unit"><input name="limit" type="number" min=".001" step="any" value="240" required><span>s</span></span></label>
             </div>
           </details>
           <div class="run-controls">
-            <button type="submit" id="run" class="primary">執行模擬</button>
-            <button type="button" id="stop" hidden>停止</button>
+            <button type="submit" id="run" class="primary">Run Simulation</button>
+            <button type="button" id="stop" hidden>Stop</button>
           </div>
-          <progress id="progress" max="100" value="0" aria-label="模擬進度"></progress>
-          <p id="status" class="status" role="status">就緒 · 在瀏覽器執行</p>
+          <progress id="progress" max="100" value="0" aria-label="Simulation Progress"></progress>
+          <p id="status" class="status" role="status">Ready to run in your browser</p>
           <section class="vehicle-settings" aria-labelledby="vehicle-heading">
-            <h2 id="vehicle-heading">車輛設定</h2>
-            <p class="field-note">留空會沿用匯入檔或 LP03 預設值。</p>
+            <h2 id="vehicle-heading">Vehicle Settings</h2>
+            <p class="field-note">Leave fields blank to use imported settings or LP03 defaults.</p>
             <div id="vehicle-fields"></div>
             <details>
-              <summary>匯入設定與曲線</summary>
-              <p class="field-note">JSON 與 TIR 範本中的數值以 0 起始，請填入自己的參數後再匯入求解。</p>
+              <summary>Import Settings and Curves</summary>
+              <p class="field-note">JSON and TIR templates start with zero values. Enter your parameters before importing.</p>
               <div class="files">
                 <div class="file-example">
-                  <label for="upload-vehicle">車輛設定 JSON</label>
-                  <a class="example-link" href="./examples/vehicle.json" download aria-label="下載車輛設定 JSON 範本">下載範本</a>
+                  <label for="upload-vehicle">Vehicle Settings JSON</label>
+                  <a class="example-link" href="./examples/vehicle.json" download aria-label="Download the vehicle settings JSON template">Download Template</a>
                   <input id="upload-vehicle" type="file" name="vehicle" accept=".json">
                 </div>
                 <div class="file-example">
-                  <label for="upload-suspension">懸吊專案 JSON</label>
-                  <a class="example-link" href="./examples/suspension.json" download aria-label="下載懸吊專案 JSON 範本">下載範本</a>
+                  <label for="upload-suspension">Suspension Project JSON</label>
+                  <a class="example-link" href="./examples/suspension.json" download aria-label="Download the suspension project JSON template">Download Template</a>
                   <input id="upload-suspension" type="file" name="suspension" accept=".json">
                 </div>
                 <div class="file-example">
-                  <label for="upload-tire">輪胎 TIR</label>
-                  <a class="example-link" href="./examples/tire.tir" download aria-label="下載輪胎 TIR 範本">下載範本</a>
+                  <label for="upload-tire">Tire TIR</label>
+                  <a class="example-link" href="./examples/tire.tir" download aria-label="Download the tire TIR template">Download Template</a>
                   <input id="upload-tire" type="file" name="tire" accept=".tir">
                 </div>
                 <div class="file-example">
-                  <label for="upload-motor">馬達曲線 CSV</label>
-                  <a class="example-link" href="./examples/motor.csv" download aria-label="下載馬達曲線 CSV 範例">下載範例</a>
+                  <label for="upload-motor">Motor Curve CSV</label>
+                  <a class="example-link" href="./examples/motor.csv" download aria-label="Download the example motor curve CSV">Download Example</a>
                   <input id="upload-motor" type="file" name="motor" accept=".csv">
                 </div>
                 <div class="file-example">
-                  <label for="upload-aero">空力係數 JSON</label>
-                  <a class="example-link" href="./examples/aero.json" download aria-label="下載空力係數 JSON 範本">下載範本</a>
+                  <label for="upload-aero">Aerodynamic Coefficients JSON</label>
+                  <a class="example-link" href="./examples/aero.json" download aria-label="Download the aerodynamic coefficients JSON template">Download Template</a>
                   <input id="upload-aero" type="file" name="aero" accept=".json">
                 </div>
               </div>
@@ -98,74 +98,74 @@
           </section>
         </form>
       </aside>
-      <section class="results" id="results" aria-label="模擬結果" tabindex="0" data-empty>
+      <section class="results" id="results" aria-label="Simulation Results" tabindex="0" data-empty>
         <div class="metrics">
-          <div class="metric panel"><span id="timing-label">最佳圈速</span><strong id="time">—</strong><small>s</small></div>
-          <div class="metric panel"><span>最高車速</span><strong id="peak-speed">—</strong><small>km/h</small></div>
-          <div class="metric panel"><span>峰值側向加速度</span><strong id="peak-lateral">—</strong><small>g</small></div>
-          <div class="metric panel"><span>工況距離</span><strong id="distance">—</strong><small>m</small></div>
+          <div class="metric panel"><span id="timing-label">Best Lap</span><strong id="time">—</strong><small>s</small></div>
+          <div class="metric panel"><span>Top Speed</span><strong id="peak-speed">—</strong><small>km/h</small></div>
+          <div class="metric panel"><span>Peak Lateral Acceleration</span><strong id="peak-lateral">—</strong><small>g</small></div>
+          <div class="metric panel"><span>Course Distance</span><strong id="distance">—</strong><small>m</small></div>
         </div>
         <section class="replay panel" id="replay">
-          <div class="section-heading"><h2>駕駛回放</h2><output id="replay-speed">— km/h</output></div>
+          <div class="section-heading"><h2>Driving Replay</h2><output id="replay-speed">— km/h</output></div>
           <div class="replay-layout">
             <div class="replay-scene">
-              <canvas id="vehicle-scene" role="img" aria-label="隨遙測移動的立體方程式賽車"></canvas>
-              <p class="empty-state">模擬完成後可播放車輛動畫</p>
+              <canvas id="vehicle-scene" role="img" aria-label="3D formula car animated from telemetry"></canvas>
+              <p class="empty-state">Run a simulation to replay the drive</p>
             </div>
             <div class="replay-instruments">
               <div class="gg-panel">
-                <h3>G-G 加速度圓</h3>
-                <canvas id="gg-diagram" role="img" aria-label="縱向與側向加速度軌跡"></canvas>
-                <div class="gg-values"><span>縱向 <output id="replay-ax">0.00 g</output></span><span>側向 <output id="replay-ay">0.00 g</output></span></div>
+                <h3>G–G Diagram</h3>
+                <canvas id="gg-diagram" role="img" aria-label="Longitudinal and lateral acceleration trace"></canvas>
+                <div class="gg-values"><span>Long. <output id="replay-ax">0.00 g</output></span><span>Lat. <output id="replay-ay">0.00 g</output></span></div>
               </div>
-              <label class="pedal">油門 <output id="throttle-value">0%</output><meter id="throttle" min="0" max="1" value="0" aria-label="油門"></meter></label>
-              <label class="pedal braking">煞車 <output id="brake-value">0%</output><meter id="brake" min="0" max="1" value="0" aria-label="煞車"></meter></label>
+              <label class="pedal">Throttle <output id="throttle-value">0%</output><meter id="throttle" min="0" max="1" value="0" aria-label="Throttle"></meter></label>
+              <label class="pedal braking">Brake <output id="brake-value">0%</output><meter id="brake" min="0" max="1" value="0" aria-label="Brake"></meter></label>
             </div>
           </div>
-          <fieldset class="playback" id="replay-controls" aria-label="回放控制" disabled>
-            <button id="play" type="button">播放</button>
-            <button id="restart" type="button">回起點</button>
-            <label class="sr-only" for="camera">回放視角</label>
-            <select id="camera"><option value="follow">跟車</option><option value="overhead">俯視</option></select>
-            <label class="sr-only" for="play-rate">播放倍率</label>
+          <fieldset class="playback" id="replay-controls" aria-label="Playback Controls" disabled>
+            <button id="play" type="button">Play</button>
+            <button id="restart" type="button">Restart</button>
+            <label class="sr-only" for="camera">Replay Camera</label>
+            <select id="camera"><option value="follow">Follow</option><option value="overhead">Overhead</option></select>
+            <label class="sr-only" for="play-rate">Playback Speed</label>
             <select id="play-rate"><option value=".25">0.25×</option><option value=".5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
-            <input id="scrub" type="range" min="0" max="1" value="0" step="1" aria-label="回放時間軸">
+            <input id="scrub" type="range" min="0" max="1" value="0" step="1" aria-label="Playback Timeline">
             <output id="play-time" for="scrub">— s</output>
           </fieldset>
         </section>
         <section class="map panel">
-          <div class="section-heading"><div><h2>行駛軌跡</h2><p id="map-caption">9.125 m 定圓</p></div><span class="map-tag">俯視</span></div>
+          <div class="section-heading"><div><h2>Vehicle Path</h2><p id="map-caption">9.125 m Skidpad</p></div><span class="map-tag">Overhead</span></div>
           <div class="map-frame">
-            <canvas id="map" role="img" aria-label="賽道中心線與車輛行駛軌跡"></canvas>
-            <p class="empty-state">模擬完成後顯示行駛軌跡</p>
+            <canvas id="map" role="img" aria-label="Track centerline and vehicle path"></canvas>
+            <p class="empty-state">Run a simulation to see the vehicle path</p>
           </div>
-          <div id="map-legend" class="map-legend" hidden><span class="legend-line"></span>賽道中心線 <span class="start-dot"></span>起點<div id="speed-key"><span id="min-speed"></span><i></i><span id="max-speed"></span> km/h</div></div>
+          <div id="map-legend" class="map-legend" hidden><span class="legend-line"></span>Track Centerline <span class="start-dot"></span>Start<div id="speed-key"><span id="min-speed"></span><i></i><span id="max-speed"></span> km/h</div></div>
         </section>
         <section class="chart panel">
-          <div class="section-heading"><h2>遙測分析</h2><label class="sr-only" for="signal">遙測項目</label>
+          <div class="section-heading"><h2>Telemetry</h2><label class="sr-only" for="signal">Telemetry Channel</label>
             <select id="signal" disabled>
-              <option value="speed">車速</option><option value="accel">加速度</option><option value="attitude">側傾與俯仰</option>
-              <option value="heave">車身升沉</option><option value="loads">四輪輪荷</option><option value="travel">懸吊行程</option>
-              <option value="slip">滑移率</option><option value="angle">側滑角</option><option value="drive">驅動扭矩</option>
-              <option value="brake">煞車扭矩</option><option value="aero">空力</option><option value="cop">空力作用點</option><option value="pedals">油門與煞車</option>
+              <option value="speed">Speed</option><option value="accel">Acceleration</option><option value="attitude">Roll and Pitch</option>
+              <option value="heave">Body Heave</option><option value="loads">Wheel Loads</option><option value="travel">Suspension Travel</option>
+              <option value="slip">Slip Ratio</option><option value="angle">Slip Angle</option><option value="drive">Drive Torque</option>
+              <option value="brake">Brake Torque</option><option value="aero">Aerodynamics</option><option value="cop">Aero Center of Pressure</option><option value="pedals">Throttle and Brake</option>
             </select>
           </div>
-          <div class="chart-frame"><canvas id="chart" role="img" aria-label="模擬遙測時間圖"></canvas><p class="empty-state">模擬完成後顯示遙測圖表</p></div>
+          <div class="chart-frame"><canvas id="chart" role="img" aria-label="Simulation telemetry over time"></canvas><p class="empty-state">Run a simulation to see telemetry charts</p></div>
           <div id="chart-legend" class="chart-legend"></div>
         </section>
         <section class="exports panel" id="exports" hidden>
-          <div class="section-heading"><h2>計時與下載</h2></div>
+          <div class="section-heading"><h2>Timing and Downloads</h2></div>
           <div class="table-scroll"><table><thead id="timing-head"></thead><tbody id="timing-body"></tbody></table></div>
           <p id="run-deviation" class="field-note"></p>
           <div class="download-links">
-            <a data-download="telemetry.csv" download="telemetry.csv">遙測 CSV</a>
-            <a data-download="telemetry_summary.csv" download="telemetry_summary.csv">計時 CSV</a>
-            <a id="download-zip" data-download="run.zip" download="vehicle14dof-run.zip">完整結果 ZIP</a>
+            <a data-download="telemetry.csv" download="telemetry.csv">Telemetry CSV</a>
+            <a data-download="telemetry_summary.csv" download="telemetry_summary.csv">Timing CSV</a>
+            <a id="download-zip" data-download="run.zip" download="vehicle14dof-run.zip">Complete Results ZIP</a>
           </div>
         </section>
       </section>
     </div>
-    <footer><span>Vehicle 14DOF Lab</span><a href="./pacejka-license.txt">Pacejka 授權</a></footer>
+    <footer><span>Vehicle 14DOF Lab</span><a href="./pacejka-license.txt">Pacejka License</a></footer>
   </main>
 </body>
 </html>

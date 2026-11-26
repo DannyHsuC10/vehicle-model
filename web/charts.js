@@ -3,19 +3,19 @@ const wheels = ["FL", "FR", "RL", "RR"];
 const four = key => wheels.map(wheel => [wheel, wheel + "_" + key]);
 
 export const signals = {
-  speed: { unit: "km/h", scale: 3.6, channels: [["車速", "speed_mps"]] },
-  accel: { unit: "g", scale: 1 / 9.81, channels: [["縱向", "ax_mps2"], ["側向", "ay_mps2"]] },
-  attitude: { unit: "°", channels: [["側傾", "roll_deg"], ["俯仰", "pitch_deg"]] },
-  heave: { unit: "mm", channels: [["升沉", "heave_mm"]] },
+  speed: { unit: "km/h", scale: 3.6, channels: [["Speed", "speed_mps"]] },
+  accel: { unit: "g", scale: 1 / 9.81, channels: [["Longitudinal", "ax_mps2"], ["Lateral", "ay_mps2"]] },
+  attitude: { unit: "°", channels: [["Roll", "roll_deg"], ["Pitch", "pitch_deg"]] },
+  heave: { unit: "mm", channels: [["Heave", "heave_mm"]] },
   loads: { unit: "N", channels: four("fz_n") },
   travel: { unit: "mm", channels: four("wheel_travel_mm") },
   slip: { unit: "%", scale: 100, channels: four("slip_ratio") },
   angle: { unit: "°", channels: four("slip_angle_deg") },
   drive: { unit: "N·m", channels: four("drive_nm") },
   brake: { unit: "N·m", channels: four("brake_nm") },
-  aero: { unit: "N", channels: [["下壓力", "downforce_n"], ["阻力", "drag_n"]] },
+  aero: { unit: "N", channels: [["Downforce", "downforce_n"], ["Drag", "drag_n"]] },
   cop: { unit: "m", channels: [["X", "cop_x_m"], ["Y", "cop_y_m"], ["Z", "cop_z_m"]] },
-  pedals: { unit: "%", scale: 100, channels: [["油門", "throttle"], ["煞車", "brake"]] },
+  pedals: { unit: "%", scale: 100, channels: [["Throttle", "throttle"], ["Brake", "brake"]] },
 };
 
 export function extent(values) {

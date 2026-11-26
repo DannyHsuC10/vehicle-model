@@ -181,10 +181,10 @@ function drawGG(canvas, data, index, limit) {
   ctx.fillStyle = "#9eafc1";
   ctx.font = "11px system-ui";
   ctx.textAlign = "center";
-  ctx.fillText(`+${limit} g 縱向`, x, y - radius - 5);
+  ctx.fillText(`+${limit} g long.`, x, y - radius - 5);
   ctx.fillText(`−${limit} g`, x, y + radius + 13);
-  ctx.fillText("左", x - radius - 9, y + 4);
-  ctx.fillText("右", x + radius + 9, y + 4);
+  ctx.fillText("L", x - radius - 9, y + 4);
+  ctx.fillText("R", x + radius + 9, y + 4);
   const point = row => [x - data.ay_mps2[row] / G / limit * radius, y - data.ax_mps2[row] / G / limit * radius];
   ctx.beginPath();
   for (let i = Math.max(0, index - 75); i <= index; i++) {

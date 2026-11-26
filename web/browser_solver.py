@@ -1,10 +1,12 @@
 """Bridge between the browser worker and the shared 14DOF simulation."""
 
 from copy import deepcopy
+from contextlib import contextmanager
 import csv
 import json
 import math
 from pathlib import Path
+import re
 from shutil import copyfile
 from tempfile import TemporaryDirectory
 from time import monotonic
@@ -39,12 +41,23 @@ PLOT_COLUMNS = (
                  "steer_deg", "wheel_spin_rad", "rolling_radius_m", "camber_deg")
     for corner in ("FL", "FR", "RL", "RR")
 )
+CHINESE_TEXT = re.compile(r"[\u3400-\u9fff]")
+
+
+@contextmanager
+def english_errors(message):
+    try:
+        yield
+    except (ValueError, RuntimeError) as exc:
+        if CHINESE_TEXT.search(str(exc)):
+            raise ValueError(message) from exc
+        raise
 
 
 def read_json(path):
     data = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(data, dict):
-        raise ValueError(f"{path.name} 須使用 JSON 物件。")
+        raise ValueError(f"{path.name} must contain a JSON object.")
     return data
 
 
@@ -62,8 +75,8 @@ def write_csv(path, rows):
 def apply_settings(vehicle, suspension, overrides):
     roots = {"vehicle": vehicle, "suspension": suspension}
     curve_scales = {"spring_scale": ("spring",), "damper_scale": ("compression", "rebound"), "mr_scale": ("mr",)}
-    damper_fields = {"compression_coefficient": ("compression", "壓縮阻尼係數"),
-                     "rebound_coefficient": ("rebound", "回彈阻尼係數")}
+    damper_fields = {"compression_coefficient": ("compression", "Compression damping coefficient"),
+                     "rebound_coefficient": ("rebound", "Rebound damping coefficient")}
     damper_overrides = {}
     for key, value in overrides.items():
         group, *parts = key.split(".")
@@ -75,22 +88,25 @@ def apply_settings(vehicle, suspension, overrides):
         name = int(parts[-1]) if isinstance(target, list) else parts[-1]
         if group == "suspension" and parts[:1] == ["channels"] and name == "mr_fixed":
             if type(value) not in (int, float) or not math.isfinite(value) or value < 1e-6:
-                raise ValueError("固定運動比須為有限正數，且至少為 0.000001。")
+                raise ValueError("Fixed motion ratio must be a finite number of at least 0.000001.")
             target["mr"] = [[0., value]]
         elif group == "suspension" and parts[:1] == ["channels"] and name == "main_rate":
             tender = target["spring_kind"] == "tender"
-            target["main_rate"] = number(value, "彈簧／主簧剛性", 1e-6 if tender else 0.)
+            minimum = 1e-6 if tender else 0.
+            with english_errors(f"Main spring rate must be a finite number of at least {minimum:g} N/mm."):
+                target["main_rate"] = number(value, "Main spring rate", minimum)
             if not tender:
                 target["spring_kind"] = "single"
                 target.pop("spring", None)
         elif group == "suspension" and parts[:1] == ["channels"] and name in damper_fields:
             direction, label = damper_fields[name]
-            damper_overrides.setdefault(parts[1], {})[direction] = number(value, label, 0.)
+            with english_errors(f"{label} must be a finite, nonnegative number in N·s/m."):
+                damper_overrides.setdefault(parts[1], {})[direction] = number(value, label, 0.)
         elif group == "suspension" and parts[:1] == ["channels"] and name in curve_scales:
             if name == "mr_scale" and f"suspension.channels.{parts[1]}.mr_fixed" in overrides:
                 continue
             if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
-                raise ValueError("懸吊倍率須為有限正數。")
+                raise ValueError("Suspension scale factors must be finite and positive.")
             for curve in curve_scales[name]:
                 if curve in target:
                     target[curve] = [[x, y * value] for x, y in target[curve]]
@@ -154,8 +170,10 @@ def snapshot(inputs, uploaded, overrides):
     config["aero"] = aero_settings(config, inputs)
     config.pop("aero_file", None)
     suspension_file = inputs / UPLOADS["suspension"]
-    suspension, _ = open_project(suspension_file)
-    apply_settings(config, suspension, overrides)
+    with english_errors("Invalid suspension project. Check the vehicle, tire, and suspension channel settings."):
+        suspension, _ = open_project(suspension_file)
+    with english_errors("Invalid suspension settings. Check the vehicle mass, spring rates, damping, and motion ratios."):
+        apply_settings(config, suspension, overrides)
     symmetrize_settings(config, suspension)
     for key, kind in PROFILE_INPUTS.items():
         config[key] = UPLOADS[kind]
@@ -175,20 +193,22 @@ def run(payload, progress, working_directory):
     }
     mode = options["mode"]
     if mode not in ("custom", "skidpad", "straight"):
-        raise ValueError("請選擇有效的工況。")
+        raise ValueError("Select a valid test mode.")
     if mode == "custom" and "track" not in uploaded:
-        raise ValueError("請匯入自訂賽道 CSV。")
+        raise ValueError("Import a track CSV for Custom Track mode.")
 
     with TemporaryDirectory() as staging:
         run_dir = Path(staging)
         inputs = run_dir / "inputs"
         inputs.mkdir()
-        vehicle = Vehicle14DOF(snapshot(inputs, uploaded, options.get("overrides", {})))
+        config = snapshot(inputs, uploaded, options.get("overrides", {}))
+        with english_errors("Could not initialize the vehicle. Check the suspension, geometry, and tire settings."):
+            vehicle = Vehicle14DOF(config)
         track = None
         if mode == "straight":
             length = 75.
             centerline = np.array([[0., 0.], [length, 0.]])
-            case_name = f"{length:g} m 直線加速"
+            case_name = f"{length:g} m Straight-Line Acceleration"
         else:
             track_input = SKIDPAD if mode == "skidpad" else uploaded["track"]
             copyfile(track_input, inputs / "track.csv")

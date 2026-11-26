@@ -37,6 +37,7 @@ def main():
     from Vehicle14DOFLab.aero_setup import aero_settings
     from Vehicle14DOFLab.resources import SKIDPAD
     from Vehicle14DOFLab._vendor.pacejka.tir_io import read_tir, write_tir
+    from Vehicle14DOFLab._vendor.suspension.project import compile_component
 
     vehicle = json.loads((LAB / "lp03.json").read_text(encoding="utf-8"))
     if vehicle["tire_file"] != PUBLIC_TIRE:
@@ -62,7 +63,13 @@ def main():
     copy2(SKIDPAD, DIST / "skidpad-example.csv")
     vehicle["aero"] = aero_settings(vehicle, LAB)
     suspension = json.loads((LAB / "input_data/LP03.json").read_text(encoding="utf-8-sig"))
-    defaults = {"vehicle": vehicle, "suspension": suspension}
+    # The browser mirrors the left-side unsprung masses to the right.
+    unsprung = 2 * sum(suspension["tires"][corner]["mu"] for corner in ("FL", "RL"))
+    critical_damping = {
+        name: compile_component(name, channel, suspension["vehicle"], unsprung).critical_damping
+        for name, channel in suspension["channels"].items() if channel.get("damper_ratio")
+    }
+    defaults = {"vehicle": vehicle, "suspension": suspension, "critical_damping": critical_damping}
     (DIST / "vehicle-defaults.json").write_text(json.dumps(defaults, ensure_ascii=False), encoding="utf-8")
 
     examples = DIST / "examples"
