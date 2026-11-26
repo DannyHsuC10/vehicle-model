@@ -4,20 +4,22 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="LP03 十四自由度車輛動態模擬工作台">
-  <meta name="theme-color" content="#0c1118">
+  <meta name="theme-color" content="#111d31">
   <title>Vehicle 14DOF Lab</title>
   <link rel="stylesheet" href="./style.css">
   <script type="module" src="./app.js"></script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>Vehicle 14DOF <strong>Lab</strong></div>
-    <span class="top-meta">LP03 車輛動態模擬</span>
+    <div class="frame header-row">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>Vehicle 14DOF Lab</div>
+      <span class="top-meta">LP03 車輛動態模擬</span>
+    </div>
   </header>
-  <main>
+  <main class="frame">
     <div class="page-heading">
-      <div><p class="eyebrow">LP03 / VEHICLE DYNAMICS</p><h1>14 DOF 模擬工作台</h1></div>
-      <div class="engine-label"><span>求解器</span><strong>RK4 <b>·</b> Magic Formula 6.1.2</strong></div>
+      <h1>14 DOF 模擬工作台</h1>
+      <div class="engine-label"><span>求解器</span><strong>RK4 · Magic Formula 6.1.2</strong></div>
     </div>
     <div class="workbench">
       <aside class="settings panel" aria-labelledby="settings-title" tabindex="0">
@@ -52,7 +54,7 @@
             </div>
           </details>
           <div class="run-controls">
-            <button type="submit" id="run" class="primary"><span aria-hidden="true">▶</span> 執行模擬</button>
+            <button type="submit" id="run" class="primary">執行模擬</button>
             <button type="button" id="stop" hidden>停止</button>
           </div>
           <progress id="progress" max="100" value="0" aria-label="模擬進度"></progress>
