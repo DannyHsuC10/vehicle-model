@@ -1,0 +1,2 @@
+﻿lap,lap_time_s,start_time_s,finish_time_s,track_length_m,track_csv,target_max_speed_kmh,target_lateral_accel_mps2,vehicle_config,suspension_config
+1,99.41892486067252,0.0,99.41892486067252,1223.9583735909061,../../../input_data/fsae_A_2025.csv,100.0,19.62,inputs/vehicle.json,inputs/suspension.json

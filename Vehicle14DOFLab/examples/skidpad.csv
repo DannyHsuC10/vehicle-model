@@ -1,0 +1,3 @@
+section,Type,Start_X,Start_Y,End_X,End_Y,Center_X,Center_Y,Radius,Start_Angle (deg),End_Angle (deg),length,Direction
+1,ARC,9.125,0,-9.125,0,0,0,9.125,0,180,28.6670329640,Counterclockwise
+2,ARC,-9.125,0,9.125,0,0,0,9.125,180,360,28.6670329640,Counterclockwise

@@ -1,0 +1,2 @@
+﻿lap,lap_time_s,start_time_s,finish_time_s,track_length_m,track_csv,vehicle_config,suspension_config
+1,161.27421875978166,0.0,161.27421875978166,1223.9583735909061,../../../input_data/fsae_A_2025.csv,../../../lp03.json,../../../input_data/LP03.json

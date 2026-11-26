@@ -1,0 +1,53 @@
+{
+  "suspension_project": "suspension.json",
+  "tire_file": "../../../../input_data/tir/Hoosier_43075_R20_W8_candidate.tir",
+  "motor_envelope": "../../../../input_data/lp03_voltage_envelope.csv",
+  "aero": {
+    "enabled": true,
+    "reference_speed_kmh": 72.0,
+    "reference_downforce_n": 705.6,
+    "reference_drag_n": 529.2
+  },
+  "yaw_inertia_kg_m2": 130.0,
+  "wheel_inertia_kg_m2": [
+    0.9,
+    0.9,
+    0.9,
+    0.9
+  ],
+  "rolling_radius_m": 0.203,
+  "tire_pressure_kpa": [
+    80.0,
+    80.0,
+    80.0,
+    80.0
+  ],
+  "static_camber_deg": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "suspension_geometry": {
+    "load_transfer_enabled": false,
+    "camber_gain_deg_per_25mm": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "dc_voltage": 530.0,
+  "gear_ratio": 11.2,
+  "gear_efficiency": 0.95,
+  "drive_scale": [
+    0.67,
+    0.67,
+    1.0,
+    1.0
+  ],
+  "front_brake_bias": 0.7,
+  "brake_leverage": 12.6,
+  "max_pedal_force_n": 500.0,
+  "rolling_resistance_coefficient": 0.015
+}

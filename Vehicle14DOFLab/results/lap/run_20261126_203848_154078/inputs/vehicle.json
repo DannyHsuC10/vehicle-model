@@ -1,0 +1,84 @@
+{
+  "suspension_project": "suspension.json",
+  "tire_file": "../../../../input_data/tir/Hoosier_43075_R20_W8_candidate.tir",
+  "motor_envelope": "../../../../input_data/lp03_voltage_envelope.csv",
+  "aero": {
+    "model": "modal",
+    "enabled": true,
+    "reference_speed_kmh": 72.0,
+    "reference_downforce_n": 705.6,
+    "reference_drag_n": 529.2,
+    "coefficients": {
+      "rho": 1.225,
+      "area": 1.2,
+      "CL0": -2.4,
+      "CD0": 1.8,
+      "Kh": -5.0,
+      "Kp": 25.0,
+      "Kr": -5.0,
+      "Khh": 50.0,
+      "Kpp": 40.0,
+      "Krr": 100.0,
+      "Kd_h": 0.8,
+      "Kd_p": 0.3,
+      "Kd_r": 0.3,
+      "front_balance": 0.45,
+      "K_balance_pitch": 0.2,
+      "K_balance_roll": 0.1,
+      "cop_z": 0.0
+    }
+  },
+  "yaw_inertia_kg_m2": 130.0,
+  "wheel_inertia_kg_m2": [
+    0.9,
+    0.9,
+    0.9,
+    0.9
+  ],
+  "free_radius_m": 0.203,
+  "tire_pressure_kpa": [
+    80.0,
+    80.0,
+    80.0,
+    80.0
+  ],
+  "static_camber_deg": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "suspension_geometry": {
+    "load_transfer_enabled": false,
+    "camber_gain_deg_per_25mm": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "tables": {}
+  },
+  "dc_voltage": 530.0,
+  "gear_ratio": 11.2,
+  "gear_efficiency": 0.95,
+  "drive_scale": [
+    0.67,
+    0.67,
+    1.0,
+    1.0
+  ],
+  "front_brake_bias": 0.7,
+  "max_pedal_force_n": 500.0,
+  "hydraulic_brake": {
+    "pedal_ratio": 2.8,
+    "front_master_diameter_m": 0.012,
+    "rear_master_diameter_m": 0.012,
+    "front_caliper_diameter_m": 0.0254,
+    "rear_caliper_diameter_m": 0.0254,
+    "front_pistons": 4,
+    "rear_pistons": 2,
+    "front_disc_diameter_m": 0.17,
+    "rear_disc_diameter_m": 0.17,
+    "pad_mu": 0.55
+  }
+}

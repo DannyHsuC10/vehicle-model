@@ -1,0 +1,567 @@
+{
+  "application": "SuspensionSetupLab",
+  "schema_version": 1,
+  "name": "Vehicle Initial Sizing",
+  "model": "half_fr",
+  "notes": [
+    "已匯入全車線性元件與車輛參數。工況使用新工具預設值。",
+    "來源標記使用 Tender，但缺少完整併圈行程與安裝條件。請在元件頁輸入實際值，匯入目前保留來源的線性升沉剛性。"
+  ],
+  "model_sources": {
+    "quarter": "FL",
+    "half_lr": "front",
+    "half_fr": "right"
+  },
+  "aero": {
+    "enabled": true,
+    "reference_speed_kmh": 43.0,
+    "reference_force_n": 420.0
+  },
+  "vehicle": {
+    "m": 320.0,
+    "lf": 0.765,
+    "lr": 0.765,
+    "tf": 1.25,
+    "tr": 1.24,
+    "h_cg": 0.3,
+    "Ixx": 7.917820044730256,
+    "Iyy": 100.0,
+    "body_twist_k": 180000.0,
+    "body_twist_c": 300.0,
+    "h_rc_f": 0.03,
+    "h_rc_r": 0.04,
+    "dive_front": 0.15,
+    "lift_rear": 0.15,
+    "lift_front": 0.15,
+    "squat_rear": 0.15
+  },
+  "tires": {
+    "FL": {
+      "mu": 13.0,
+      "k": 80.0,
+      "c": 50.0
+    },
+    "FR": {
+      "mu": 13.0,
+      "k": 80.0,
+      "c": 50.0
+    },
+    "RL": {
+      "mu": 13.0,
+      "k": 80.0,
+      "c": 50.0
+    },
+    "RR": {
+      "mu": 13.0,
+      "k": 80.0,
+      "c": 50.0
+    }
+  },
+  "channels": {
+    "heave_f": {
+      "enabled": true,
+      "spring_kind": "tender",
+      "spring": [
+        [
+          0.0,
+          149.2501355526685
+        ]
+      ],
+      "damper_kind": "bilinear",
+      "compression": [
+        [
+          0.0,
+          0.7000000000000002
+        ],
+        [
+          0.25,
+          0.4
+        ]
+      ],
+      "rebound": [
+        [
+          0.0,
+          0.6
+        ],
+        [
+          0.25,
+          0.3
+        ]
+      ],
+      "mr": [
+        [
+          0.0,
+          1.0
+        ]
+      ],
+      "installed_mm": 0.0,
+      "main_rate": 140.0,
+      "tender_rate": 40.0,
+      "jounce_mm": 20.0,
+      "jounce_rate": 1000.0,
+      "rebound_mm": 30.0,
+      "rebound_rate": 1000.0,
+      "limit_rate_mode": "total",
+      "tender_after_static_mm": 7.0,
+      "damper_ratio": true
+    },
+    "heave_r": {
+      "enabled": true,
+      "spring_kind": "tender",
+      "spring": [
+        [
+          0.0,
+          149.2501355526685
+        ]
+      ],
+      "damper_kind": "bilinear",
+      "compression": [
+        [
+          0.0,
+          0.7000000000000003
+        ],
+        [
+          0.25,
+          0.4
+        ]
+      ],
+      "rebound": [
+        [
+          0.0,
+          0.6
+        ],
+        [
+          0.25,
+          0.30000000000000016
+        ]
+      ],
+      "mr": [
+        [
+          0.0,
+          1.0
+        ]
+      ],
+      "installed_mm": 0.0,
+      "main_rate": 140.0,
+      "tender_rate": 40.0,
+      "jounce_mm": 20.0,
+      "jounce_rate": 1400.0,
+      "rebound_mm": 30.0,
+      "rebound_rate": 1400.0,
+      "limit_rate_mode": "total",
+      "tender_after_static_mm": 7.0,
+      "damper_ratio": true
+    },
+    "roll_f": {
+      "enabled": true,
+      "spring_kind": "single",
+      "spring": [
+        [
+          0.0,
+          105.63815836389574
+        ]
+      ],
+      "damper_kind": "bilinear",
+      "compression": [
+        [
+          0.0,
+          0.7
+        ],
+        [
+          0.25,
+          0.4
+        ]
+      ],
+      "rebound": [
+        [
+          0.0,
+          0.7
+        ],
+        [
+          0.25,
+          0.4
+        ]
+      ],
+      "mr": [
+        [
+          0.0,
+          1.0
+        ]
+      ],
+      "installed_mm": 0.0,
+      "main_rate": 80.0,
+      "tender_rate": 25.0,
+      "jounce_mm": 30.0,
+      "jounce_rate": 1000.0,
+      "rebound_mm": 30.0,
+      "rebound_rate": 1000.0,
+      "limit_rate_mode": "total",
+      "tender_after_static_mm": 5.317624707444167,
+      "damper_ratio": true
+    },
+    "roll_r": {
+      "enabled": true,
+      "spring_kind": "single",
+      "spring": [
+        [
+          0.0,
+          86.43122047955104
+        ]
+      ],
+      "damper_kind": "bilinear",
+      "compression": [
+        [
+          0.0,
+          0.7
+        ],
+        [
+          0.25,
+          0.4
+        ]
+      ],
+      "rebound": [
+        [
+          0.0,
+          0.7
+        ],
+        [
+          0.25,
+          0.4
+        ]
+      ],
+      "mr": [
+        [
+          0.0,
+          1.0
+        ]
+      ],
+      "installed_mm": 0.0,
+      "main_rate": 100.0,
+      "tender_rate": 25.0,
+      "jounce_mm": 30.0,
+      "jounce_rate": 1000.0,
+      "rebound_mm": 30.0,
+      "rebound_rate": 1000.0,
+      "limit_rate_mode": "total",
+      "tender_after_static_mm": 5.543763531320648,
+      "damper_ratio": true
+    },
+    "roll_c": {
+      "enabled": false,
+      "spring_kind": "single",
+      "spring": [
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "damper_kind": "stages",
+      "compression": [
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "rebound": [
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "mr": [
+        [
+          0.0,
+          1.0
+        ]
+      ],
+      "installed_mm": 0.0,
+      "main_rate": 0.0,
+      "tender_rate": 25.0,
+      "jounce_mm": 50.0,
+      "jounce_rate": 0.0,
+      "rebound_mm": 50.0,
+      "rebound_rate": 0.0,
+      "limit_rate_mode": "total",
+      "tender_after_static_mm": 4.3
+    },
+    "warp": {
+      "enabled": false,
+      "spring_kind": "single",
+      "spring": [
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "damper_kind": "stages",
+      "compression": [
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "rebound": [
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "mr": [
+        [
+          0.0,
+          1.0
+        ]
+      ],
+      "installed_mm": 0.0,
+      "main_rate": 0.0,
+      "tender_rate": 25.0,
+      "jounce_mm": 50.0,
+      "jounce_rate": 0.0,
+      "rebound_mm": 50.0,
+      "rebound_rate": 0.0,
+      "limit_rate_mode": "total",
+      "tender_after_static_mm": 4.3
+    },
+    "FL": {
+      "enabled": false,
+      "spring_kind": "single",
+      "spring": [
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "damper_kind": "stages",
+      "compression": [
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "rebound": [
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "mr": [
+        [
+          0.0,
+          1.0
+        ]
+      ],
+      "installed_mm": 0.0,
+      "main_rate": 0.0,
+      "tender_rate": 25.0,
+      "jounce_mm": 50.0,
+      "jounce_rate": 0.0,
+      "rebound_mm": 50.0,
+      "rebound_rate": 0.0,
+      "limit_rate_mode": "total",
+      "tender_after_static_mm": 4.3
+    },
+    "FR": {
+      "enabled": false,
+      "spring_kind": "single",
+      "spring": [
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "damper_kind": "stages",
+      "compression": [
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "rebound": [
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "mr": [
+        [
+          0.0,
+          1.0
+        ]
+      ],
+      "installed_mm": 0.0,
+      "main_rate": 0.0,
+      "tender_rate": 25.0,
+      "jounce_mm": 50.0,
+      "jounce_rate": 0.0,
+      "rebound_mm": 50.0,
+      "rebound_rate": 0.0,
+      "limit_rate_mode": "total",
+      "tender_after_static_mm": 4.3
+    },
+    "RL": {
+      "enabled": false,
+      "spring_kind": "single",
+      "spring": [
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "damper_kind": "stages",
+      "compression": [
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "rebound": [
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "mr": [
+        [
+          0.0,
+          1.0
+        ]
+      ],
+      "installed_mm": 0.0,
+      "main_rate": 0.0,
+      "tender_rate": 25.0,
+      "jounce_mm": 50.0,
+      "jounce_rate": 0.0,
+      "rebound_mm": 50.0,
+      "rebound_rate": 0.0,
+      "limit_rate_mode": "total",
+      "tender_after_static_mm": 4.3
+    },
+    "RR": {
+      "enabled": false,
+      "spring_kind": "single",
+      "spring": [
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "damper_kind": "stages",
+      "compression": [
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "rebound": [
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "mr": [
+        [
+          0.0,
+          1.0
+        ]
+      ],
+      "installed_mm": 0.0,
+      "main_rate": 0.0,
+      "tender_rate": 25.0,
+      "jounce_mm": 50.0,
+      "jounce_rate": 0.0,
+      "rebound_mm": 50.0,
+      "rebound_rate": 0.0,
+      "limit_rate_mode": "total",
+      "tender_after_static_mm": 4.3
+    }
+  },
+  "case": {
+    "scenario": "maneuver",
+    "target": "all",
+    "duration": 2.0,
+    "dt": 0.002,
+    "start": 0.5,
+    "height": 20.0,
+    "period": 0.12,
+    "speed": 0.0,
+    "ax": 19.5,
+    "ay": 5.0,
+    "ramp": 0.2,
+    "rear_delay": true,
+    "recording": [],
+    "recording_name": "",
+    "seed": 0.0,
+    "iso_lateral": false
+  },
+  "roll_center_frame": {
+    "stiffness": 1000000.0,
+    "damping": 300.0,
+    "mass": 65.0,
+    "enabled": true
+  },
+  "page_cases": {
+    "full": {
+      "model": "flex",
+      "case": {
+        "scenario": "maneuver",
+        "target": "FL",
+        "duration": 5.0,
+        "dt": 0.002,
+        "start": 0.5,
+        "height": 15.0,
+        "period": 0.12,
+        "speed": 13.0,
+        "ax": 22.0,
+        "ay": 0.0,
+        "ramp": 1.0,
+        "rear_delay": false,
+        "recording": [],
+        "recording_name": "",
+        "seed": 0.0,
+        "iso_lateral": false
+      }
+    },
+    "half_lr": {
+      "model": "half_lr",
+      "case": {
+        "scenario": "maneuver",
+        "target": "all",
+        "duration": 2.0,
+        "dt": 0.002,
+        "start": 0.5,
+        "height": 15.0,
+        "period": 0.12,
+        "speed": 12.0,
+        "ax": -5.0,
+        "ay": 22.0,
+        "ramp": 0.1,
+        "rear_delay": false,
+        "recording": [],
+        "recording_name": "",
+        "seed": 0.0,
+        "iso_lateral": false
+      }
+    },
+    "quarter": {
+      "model": "quarter",
+      "case": {
+        "scenario": "iso_a",
+        "target": "all",
+        "duration": 5.0,
+        "dt": 0.002,
+        "start": 0.5,
+        "height": 35.0,
+        "period": 0.12,
+        "speed": 13.0,
+        "ax": -5.0,
+        "ay": 5.0,
+        "ramp": 0.2,
+        "rear_delay": false,
+        "recording": [],
+        "recording_name": "",
+        "seed": 0.0,
+        "iso_lateral": false
+      }
+    }
+  }
+}

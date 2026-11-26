@@ -1,0 +1,23 @@
+{
+  "mode": "圈速",
+  "arguments": [
+    "--initial-speed",
+    "0.0",
+    "--step",
+    "0.005",
+    "--time-limit",
+    "240.0",
+    "--track",
+    "../../../input_data/fsae_A_2025.csv",
+    "--width",
+    "3.0",
+    "--laps",
+    "1",
+    "--warmup-laps",
+    "0",
+    "--max-speed",
+    "27.77777777777778",
+    "--lateral-limit",
+    "19.62"
+  ]
+}

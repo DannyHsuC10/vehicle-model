@@ -1,0 +1,2 @@
+﻿lap,lap_time_s,start_time_s,finish_time_s,track_length_m,track_csv,vehicle_config,suspension_config
+1,8.049041223936701,8.055812048840355,16.104853272777056,57.330559494794414,../../../examples/skidpad.csv,../../../lp03.json,../../../input_data/LP03.json

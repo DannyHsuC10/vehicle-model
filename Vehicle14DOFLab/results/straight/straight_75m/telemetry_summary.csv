@@ -1,0 +1,2 @@
+﻿distance_m,elapsed_time_s,exit_speed_kmh,vehicle_config,suspension_config
+75.0,4.341444852330567,105.01479644620511,../../../lp03.json,../../../input_data/LP03.json
