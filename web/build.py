@@ -43,7 +43,8 @@ def main():
         raise ValueError("The web build only packages the public LP03 demo tire.")
 
     DIST.mkdir(parents=True, exist_ok=True)
-    for name in ("index.html", "style.css", "app.js", "charts.js", "replay.js", "vehicle-settings.js", "worker.js"):
+    for name in ("index.html", "favicon.svg", "style.css", "app.js", "charts.js", "replay.js",
+                 "vehicle-settings.js", "worker.js"):
         copy2(WEB / name, DIST / name)
     with ZipFile(DIST / "solver.zip", "w", ZIP_DEFLATED) as archive:
         for name in SOLVER_FILES:

@@ -65,7 +65,8 @@ function channel(name) {
   return [
     [`suspension.channels.${name}.main_rate`, "彈簧／主簧剛性", "N/mm", 0],
     [`suspension.channels.${name}.mr_fixed`, "固定運動比", "", .000001],
-    [`suspension.channels.${name}.installed_mm`, "安裝預壓行程", "mm"],
+    [`suspension.channels.${name}.compression_coefficient`, "壓縮阻尼係數", "N·s/m", 0],
+    [`suspension.channels.${name}.rebound_coefficient`, "回彈阻尼係數", "N·s/m", 0],
     [`suspension.channels.${name}.jounce_mm`, "觸底行程", "mm", 0],
     [`suspension.channels.${name}.rebound_mm`, "伸長限位", "mm", 0],
     [`suspension.channels.${name}.rebound_rate`, "伸長限位剛性", "N/mm", 0],
@@ -143,7 +144,7 @@ export function setupVehicleSettings(container, form) {
   tableNote.hidden = true;
   const springNote = document.createElement("p");
   springNote.className = "field-note";
-  springNote.textContent = "彈簧剛性只作用於已啟用的通道。輸入剛性可調整主簧或以固定剛性取代彈簧查表，留空則沿用原設定。";
+  springNote.textContent = "輸入彈簧剛性可調整主簧或取代彈簧查表。壓縮與回彈各可改用固定阻尼係數。設定只作用於已啟用的通道，留空則沿用原設定。";
   suspension.append(geometryNote, tableNote, camber, springNote);
   for (const [name, label] of Object.entries(channelNames)) suspension.append(makeGroup(label, channel(name)));
   container.append(makeGroup("車身與重心", body), makeGroup("動力與空力", power), wheels, makeGroup("液壓煞車", brake), suspension);
@@ -187,6 +188,7 @@ export function setupVehicleSettings(container, form) {
       const isCamber = parts.includes("camber_gain_deg_per_25mm");
       const isMotion = parts.at(-1) === "mr_fixed";
       const isSpring = parts.at(-1) === "main_rate";
+      const direction = { compression_coefficient: "compression", rebound_coefficient: "rebound" }[parts.at(-1)];
       const readPath = isMotion ? [...parts.slice(0, -1), "mr"] : parts;
       let value = readPath.reduce((object, key) => object?.[key], reference);
       if (path === "vehicle.front_free_radius_m" || path === "vehicle.rear_free_radius_m") {
@@ -205,6 +207,11 @@ export function setupVehicleSettings(container, form) {
         const kind = reference.suspension?.channels?.[parts[2]]?.spring_kind;
         input.min = kind === "tender" ? .000001 : 0;
         if (kind === "stages" || kind === "force") value = "沿用曲線";
+      }
+      if (direction) {
+        const channel = reference.suspension?.channels?.[parts[2]];
+        const curve = channel?.[direction];
+        if (curve?.length) value = !channel.damper_ratio && curve.length === 1 ? curve[0][1] : "沿用設定";
       }
       if (input.tagName === "SELECT") {
         input.options[0].textContent = typeof value === "boolean" ? `沿用設定（${value ? "啟用" : "停用"}）` : "沿用設定";

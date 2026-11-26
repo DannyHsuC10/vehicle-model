@@ -12,9 +12,9 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import numpy as np
 
-from Vehicle14DOFLab._vendor.suspension.components import number
+from Vehicle14DOFLab._vendor.suspension.components import damper_kinds, number
 from Vehicle14DOFLab._vendor.suspension.engine import G
-from Vehicle14DOFLab._vendor.suspension.project import open_project
+from Vehicle14DOFLab._vendor.suspension.project import compile_component, open_project
 from Vehicle14DOFLab.aero_setup import aero_settings
 from Vehicle14DOFLab.lap import Driver, Track, simulate_laps
 from Vehicle14DOFLab.model import DEFAULT_CONFIG, Vehicle14DOF
@@ -62,6 +62,9 @@ def write_csv(path, rows):
 def apply_settings(vehicle, suspension, overrides):
     roots = {"vehicle": vehicle, "suspension": suspension}
     curve_scales = {"spring_scale": ("spring",), "damper_scale": ("compression", "rebound"), "mr_scale": ("mr",)}
+    damper_fields = {"compression_coefficient": ("compression", "壓縮阻尼係數"),
+                     "rebound_coefficient": ("rebound", "回彈阻尼係數")}
+    damper_overrides = {}
     for key, value in overrides.items():
         group, *parts = key.split(".")
         if group == "vehicle" and parts[:2] == ["suspension_geometry", "camber_gain_deg_per_25mm"]:
@@ -80,6 +83,9 @@ def apply_settings(vehicle, suspension, overrides):
             if not tender:
                 target["spring_kind"] = "single"
                 target.pop("spring", None)
+        elif group == "suspension" and parts[:1] == ["channels"] and name in damper_fields:
+            direction, label = damper_fields[name]
+            damper_overrides.setdefault(parts[1], {})[direction] = number(value, label, 0.)
         elif group == "suspension" and parts[:1] == ["channels"] and name in curve_scales:
             if name == "mr_scale" and f"suspension.channels.{parts[1]}.mr_fixed" in overrides:
                 continue
@@ -94,6 +100,20 @@ def apply_settings(vehicle, suspension, overrides):
                         target[rate] *= value
         else:
             target[name] = value
+
+    for channel, coefficients in damper_overrides.items():
+        settings = suspension["channels"][channel]
+        kinds = damper_kinds(settings["damper_kind"])
+        if settings.get("damper_ratio") and len(coefficients) == 1:
+            # Use the effective mass after the browser mirrors the left side.
+            unsprung = 2 * sum(suspension["tires"][corner]["mu"] for corner in ("FL", "RL"))
+            critical = compile_component(channel, settings, suspension["vehicle"], unsprung).critical_damping
+            for direction in kinds.keys() - coefficients.keys():
+                settings[direction] = [[speed, ratio * critical] for speed, ratio in settings[direction]]
+        for direction, coefficient in coefficients.items():
+            kinds[direction] = "stages"
+            settings[direction] = [[0., coefficient]]
+        settings.update(damper_kind=kinds, damper_ratio=False)
 
 
 def symmetrize_settings(vehicle, suspension):
