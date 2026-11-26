@@ -10,7 +10,7 @@ import numpy as np
 
 from .lap import (DEFAULT_LATERAL_LIMIT_MPS2, DEFAULT_MAX_SPEED_MPS, DEFAULT_TRACK,
                   Driver, LapIncomplete, Track, simulate_laps)
-from .model import DEFAULT_CONFIG, Vehicle14DOF
+from .model import Vehicle14DOF, default_desktop_config
 from .plots import write_plots
 from .resources import RESULTS, path_reference, result_group
 from .straight import simulate_straight
@@ -29,7 +29,7 @@ def write_csv(path, rows):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="LP03 14 DOF lap and straight-line simulation")
     parser.add_argument("--gui", action="store_true", help="Open the desktop workbench")
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--config", type=Path, default=default_desktop_config())
     course = parser.add_mutually_exclusive_group()
     course.add_argument("--track", type=Path, default=DEFAULT_TRACK,
                         help=f"Closed LapSimLab LINE/ARC CSV (default: {DEFAULT_TRACK.name})")

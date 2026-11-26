@@ -32,6 +32,11 @@ BRAKE_LOCK_SPEED = 8.0
 ROLLING_DIRECTION_RAD_S = .5
 
 
+def default_desktop_config():
+    local_config = LAB / "lp03.local.json"
+    return local_config if local_config.is_file() else DEFAULT_CONFIG
+
+
 @dataclass(frozen=True)
 class Controls:
     steer_rad: float = 0.

@@ -6,6 +6,8 @@
 
 在 Windows 雙擊 [Start-14DOF-GUI.bat](Start-14DOF-GUI.bat)，或在本專案資料夾執行 `py -3 -B run.py --gui`。可將整個資料夾搬到其他位置或重新命名。所需的預設輸入及求解模組分別位於 `input_data/` 和 `_vendor/`。
 
+有 `lp03.local.json` 時，桌面工作台與命令列會優先載入這份本機設定，命令列仍可用 `--config` 指定其他設定。Git 會忽略這份本機設定。網頁部署使用公開的 `lp03.json`。
+
 `_vendor/` 內含本模型使用的 LapSimLab、Pacejka 與 SuspensionDynamicsLab 程式副本。其他工具更新後，若要將同一改動套到 14DOF，需同步更新對應副本。
 
 - 在「工況」選擇封閉賽道、9.125 m 定圓或直線加速。搭配公開示範輪胎時，圈速預設使用 100 km/h 及 1.5 g。

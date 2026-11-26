@@ -26,7 +26,7 @@ from .aero_setup import modal_defaults
 from .driving_replay import DrivingReplay
 from .geometry_tables import AXES, DELTA_OUTPUTS, OUTPUTS, TITLES, read_table, write_template
 from .lap import DEFAULT_LATERAL_LIMIT_MPS2, DEFAULT_MAX_SPEED_MPS, DEFAULT_TRACK
-from .model import DEFAULT_CONFIG
+from .model import default_desktop_config
 from .resources import RESULT_GROUPS
 from .suspension_editor import SuspensionEditor
 from .workbench import LAB, RESULTS, Profile, Result, existing_results, number, run_arguments
@@ -94,9 +94,9 @@ def launch_path(path):
 
 
 class Workbench:
-    def __init__(self, root, config_path=DEFAULT_CONFIG):
+    def __init__(self, root, config_path=None):
         self.root = root
-        self.profile = Profile.load(config_path)
+        self.profile = Profile.load(default_desktop_config() if config_path is None else config_path)
         self.result = None
         self.process = None
         self.cancelled = False
@@ -166,7 +166,7 @@ class Workbench:
         actions = ttk.Frame(left, padding=(0, 6))
         actions.grid(row=1, column=0, sticky="ew")
         for label, command in (("開啟設定", self.open_profile), ("另存設定", self.save_profile),
-                               ("載入 LP03", lambda: self.load_profile(DEFAULT_CONFIG))):
+                               ("載入 LP03", lambda: self.load_profile(default_desktop_config()))):
             ttk.Button(actions, text=label, command=command).pack(side="left", padx=(0, 4))
         tabs = ttk.Notebook(left)
         tabs.grid(row=2, column=0, sticky="nsew")
@@ -854,7 +854,7 @@ class Workbench:
         self.status.set("此訊號可在工作台查看。這筆結果沒有對應的 SVG。")
 
 
-def main(config_path=DEFAULT_CONFIG):
+def main(config_path=None):
     root = tk.Tk()
     Workbench(root, config_path)
     root.mainloop()
