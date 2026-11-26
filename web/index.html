@@ -20,9 +20,9 @@
       <div class="engine-label"><span>求解器</span><strong>RK4 <b>·</b> Magic Formula 6.1.2</strong></div>
     </div>
     <div class="workbench">
-      <aside class="settings panel">
+      <aside class="settings panel" aria-labelledby="settings-title" tabindex="0">
         <form id="setup">
-          <h2>模擬設定</h2>
+          <h2 id="settings-title">模擬設定</h2>
           <fieldset class="mode">
             <legend>工況</legend>
             <div class="segments">
@@ -63,20 +63,21 @@
             <div id="vehicle-fields"></div>
             <details>
               <summary>匯入設定與曲線</summary>
+              <p class="field-note">JSON 與 TIR 範本中的數值以 0 起始，請填入自己的參數後再匯入求解。</p>
               <div class="files">
                 <div class="file-example">
                   <label for="upload-vehicle">車輛設定 JSON</label>
-                  <a class="example-link" href="./examples/vehicle.json" download aria-label="下載車輛設定 JSON 範例">下載範例</a>
+                  <a class="example-link" href="./examples/vehicle.json" download aria-label="下載車輛設定 JSON 範本">下載範本</a>
                   <input id="upload-vehicle" type="file" name="vehicle" accept=".json">
                 </div>
                 <div class="file-example">
                   <label for="upload-suspension">懸吊專案 JSON</label>
-                  <a class="example-link" href="./examples/suspension.json" download aria-label="下載懸吊專案 JSON 範例">下載範例</a>
+                  <a class="example-link" href="./examples/suspension.json" download aria-label="下載懸吊專案 JSON 範本">下載範本</a>
                   <input id="upload-suspension" type="file" name="suspension" accept=".json">
                 </div>
                 <div class="file-example">
                   <label for="upload-tire">輪胎 TIR</label>
-                  <a class="example-link" href="./examples/tire.tir" download aria-label="下載輪胎 TIR 範例">下載範例</a>
+                  <a class="example-link" href="./examples/tire.tir" download aria-label="下載輪胎 TIR 範本">下載範本</a>
                   <input id="upload-tire" type="file" name="tire" accept=".tir">
                 </div>
                 <div class="file-example">
@@ -86,7 +87,7 @@
                 </div>
                 <div class="file-example">
                   <label for="upload-aero">空力係數 JSON</label>
-                  <a class="example-link" href="./examples/aero.json" download aria-label="下載空力係數 JSON 範例">下載範例</a>
+                  <a class="example-link" href="./examples/aero.json" download aria-label="下載空力係數 JSON 範本">下載範本</a>
                   <input id="upload-aero" type="file" name="aero" accept=".json">
                 </div>
               </div>
@@ -94,7 +95,7 @@
           </section>
         </form>
       </aside>
-      <section class="results" aria-label="模擬結果">
+      <section class="results" aria-label="模擬結果" tabindex="0">
         <div class="metrics">
           <div class="metric panel"><span id="timing-label">最佳圈速</span><strong id="time">—</strong><small>s</small></div>
           <div class="metric panel"><span>最高車速</span><strong id="peak-speed">—</strong><small>km/h</small></div>

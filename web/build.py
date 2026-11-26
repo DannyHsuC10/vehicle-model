@@ -20,11 +20,22 @@ SOLVER_FILES = (
 )
 
 
+def zero_parameters(value):
+    if isinstance(value, dict):
+        return {key: zero_parameters(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [zero_parameters(item) for item in value]
+    if type(value) in (bool, int, float):
+        return type(value)(0)
+    return value
+
+
 def main():
     sys.path.insert(0, str(ROOT))
     from Vehicle14DOFLab.lap import Track
     from Vehicle14DOFLab.aero_setup import aero_settings
     from Vehicle14DOFLab.resources import SKIDPAD
+    from Vehicle14DOFLab._vendor.pacejka.tir_io import read_tir, write_tir
 
     DIST.mkdir(parents=True, exist_ok=True)
     for name in ("index.html", "style.css", "app.js", "charts.js", "replay.js", "vehicle-settings.js", "worker.js"):
@@ -52,10 +63,23 @@ def main():
     examples = DIST / "examples"
     examples.mkdir(exist_ok=True)
     inputs = {"suspension_project": "suspension.json", "tire_file": "tire.tir", "motor_envelope": "motor.csv"}
-    for key, name in inputs.items():
-        copy2(LAB / vehicle[key], examples / name)
-    for name, data in (("vehicle.json", vehicle | inputs), ("aero.json", vehicle["aero"]["coefficients"])):
+    copy2(LAB / vehicle["motor_envelope"], examples / inputs["motor_envelope"])
+    blank_suspension = zero_parameters(suspension) | {
+        "schema_version": suspension["schema_version"], "name": "Suspension template", "notes": [],
+    }
+    for name, data in (
+        ("vehicle.json", zero_parameters(vehicle) | inputs),
+        ("suspension.json", blank_suspension),
+        ("aero.json", zero_parameters(vehicle["aero"]["coefficients"])),
+    ):
         (examples / name).write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    tire_source = LAB / vehicle["tire_file"]
+    tire_metadata = {("MDI_HEADER", "FILE_VERSION"), ("MODEL", "FITTYP")}
+    blank_tire = {(section, key): 0 for section, parameters in read_tir(tire_source).sections.items()
+                  for key, value in parameters.items()
+                  if isinstance(value, (int, float)) and (section, key) not in tire_metadata}
+    write_tir(tire_source, examples / inputs["tire_file"], blank_tire, validate=False)
 
     copy2(LAB / "_vendor/pacejka/LICENSE", DIST / "pacejka-license.txt")
     print(DIST)
