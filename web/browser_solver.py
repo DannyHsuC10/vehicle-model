@@ -12,6 +12,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import numpy as np
 
+from Vehicle14DOFLab._vendor.suspension.components import number
 from Vehicle14DOFLab._vendor.suspension.engine import G
 from Vehicle14DOFLab._vendor.suspension.project import open_project
 from Vehicle14DOFLab.aero_setup import aero_settings
@@ -73,6 +74,12 @@ def apply_settings(vehicle, suspension, overrides):
             if type(value) not in (int, float) or not math.isfinite(value) or value < 1e-6:
                 raise ValueError("固定運動比須為有限正數，且至少為 0.000001。")
             target["mr"] = [[0., value]]
+        elif group == "suspension" and parts[:1] == ["channels"] and name == "main_rate":
+            tender = target["spring_kind"] == "tender"
+            target["main_rate"] = number(value, "彈簧／主簧剛性", 1e-6 if tender else 0.)
+            if not tender:
+                target["spring_kind"] = "single"
+                target.pop("spring", None)
         elif group == "suspension" and parts[:1] == ["channels"] and name in curve_scales:
             if name == "mr_scale" and f"suspension.channels.{parts[1]}.mr_fixed" in overrides:
                 continue

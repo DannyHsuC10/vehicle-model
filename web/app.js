@@ -13,6 +13,8 @@ const modes = {
 const fileFields = ["vehicle", "suspension", "tire", "motor", "track", "aero"];
 const vehicleSettings = setupVehicleSettings(byId("vehicle-fields"), form);
 const progress = byId("progress");
+const exportData = byId("export-data");
+const downloadZip = byId("download-zip");
 const paintRoute = routeView(byId("map"));
 const paintTime = timeView(byId("chart"), byId("chart-legend"));
 const paintReplay = replayView(byId("vehicle-scene"), byId("gg-diagram"));
@@ -164,6 +166,7 @@ function showResult(data, downloads) {
     downloadUrls.push(link.href);
   }
   byId("exports").hidden = false;
+  exportData.disabled = false;
   seek(0);
   if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) play();
 }
@@ -241,6 +244,7 @@ byId("stop").addEventListener("click", () => {
   worker = undefined;
   finish("模擬已停止");
 });
+exportData.addEventListener("click", () => downloadZip.click());
 byId("signal").addEventListener("change", redraw);
 byId("play").addEventListener("click", play);
 byId("restart").addEventListener("click", () => { pause(); seek(0); });

@@ -3,6 +3,7 @@ __pycache__/
 *.log
 *.[tT][iI][rR]
 /Vehicle14DOFLab/lp03.local.json
+/Vehicle14DOFLab/results/
 .venv/
 build/
 dist/

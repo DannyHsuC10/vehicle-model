@@ -44,7 +44,8 @@ a:hover { color: #085a54; }
 .brand-mark i { background: var(--header-line); width: 4px; height: 19px; border-radius: 1px; transform: skewX(-15deg); }
 .brand-mark i:first-child { height: 11px; opacity: .55; }
 .brand-mark i:last-child { height: 25px; }
-.top-meta { color: var(--plot-text); font-size: .875rem; }
+.header-export { color: var(--surface); background-color: var(--accent); border-color: #388e82; }
+.header-export:hover:enabled { background-color: #085a54; border-color: #58b2b9; }
 small { font-size: .8125rem; color: var(--muted); }
 main { min-width: 0; }
 .page-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: .35rem 1.2rem; padding-block: 1rem .9rem; }

@@ -13,7 +13,7 @@
   <header class="topbar">
     <div class="frame header-row">
       <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>Vehicle 14DOF Lab</div>
-      <span class="top-meta">LP03 車輛動態模擬</span>
+      <button type="button" id="export-data" class="header-export" disabled>輸出資料檔案</button>
     </div>
   </header>
   <main class="frame">
@@ -159,7 +159,7 @@
           <div class="download-links">
             <a data-download="telemetry.csv" download="telemetry.csv">遙測 CSV</a>
             <a data-download="telemetry_summary.csv" download="telemetry_summary.csv">計時 CSV</a>
-            <a data-download="run.zip" download="vehicle14dof-run.zip">完整結果 ZIP</a>
+            <a id="download-zip" data-download="run.zip" download="vehicle14dof-run.zip">完整結果 ZIP</a>
           </div>
         </section>
       </section>

@@ -63,8 +63,8 @@ const channelNames = {
 
 function channel(name) {
   return [
+    [`suspension.channels.${name}.main_rate`, "彈簧／主簧剛性", "N/mm", 0],
     [`suspension.channels.${name}.mr_fixed`, "固定運動比", "", .000001],
-    [`suspension.channels.${name}.mr_scale`, "運動比倍率", "×", .001],
     [`suspension.channels.${name}.installed_mm`, "安裝預壓行程", "mm"],
     [`suspension.channels.${name}.jounce_mm`, "觸底行程", "mm", 0],
     [`suspension.channels.${name}.rebound_mm`, "伸長限位", "mm", 0],
@@ -141,16 +141,13 @@ export function setupVehicleSettings(container, form) {
   const tableNote = document.createElement("p");
   tableNote.className = "field-note";
   tableNote.hidden = true;
-  suspension.append(geometryNote, tableNote, camber);
+  const springNote = document.createElement("p");
+  springNote.className = "field-note";
+  springNote.textContent = "彈簧剛性只作用於已啟用的通道。輸入剛性可調整主簧或以固定剛性取代彈簧查表，留空則沿用原設定。";
+  suspension.append(geometryNote, tableNote, camber, springNote);
   for (const [name, label] of Object.entries(channelNames)) suspension.append(makeGroup(label, channel(name)));
   container.append(makeGroup("車身與重心", body), makeGroup("動力與空力", power), wheels, makeGroup("液壓煞車", brake), suspension);
   const inputs = Array.from(container.querySelectorAll("[data-setting]"));
-  for (const name of Object.keys(channelNames)) {
-    const prefix = `suspension.channels.${name}`;
-    const fixed = suspension.querySelector(`[data-setting="${prefix}.mr_fixed"]`);
-    const scale = suspension.querySelector(`[data-setting="${prefix}.mr_scale"]`);
-    fixed.addEventListener("input", () => { scale.disabled = fixed.value !== ""; });
-  }
   const defaults = fetch(new URL("./vehicle-defaults.json", import.meta.url)).then(response => {
     if (!response.ok) throw new Error();
     return response.json();
@@ -189,6 +186,7 @@ export function setupVehicleSettings(container, form) {
       const scale = Number(input.dataset.displayScale || 1);
       const isCamber = parts.includes("camber_gain_deg_per_25mm");
       const isMotion = parts.at(-1) === "mr_fixed";
+      const isSpring = parts.at(-1) === "main_rate";
       const readPath = isMotion ? [...parts.slice(0, -1), "mr"] : parts;
       let value = readPath.reduce((object, key) => object?.[key], reference);
       if (path === "vehicle.front_free_radius_m" || path === "vehicle.rear_free_radius_m") {
@@ -203,10 +201,15 @@ export function setupVehicleSettings(container, form) {
         value ??= 0;
       }
       if (isMotion) value = value?.length > 1 ? "沿用曲線" : value?.[0]?.[1];
+      if (isSpring) {
+        const kind = reference.suspension?.channels?.[parts[2]]?.spring_kind;
+        input.min = kind === "tender" ? .000001 : 0;
+        if (kind === "stages" || kind === "force") value = "沿用曲線";
+      }
       if (input.tagName === "SELECT") {
         input.options[0].textContent = typeof value === "boolean" ? `沿用設定（${value ? "啟用" : "停用"}）` : "沿用設定";
       } else {
-        input.placeholder = value == null ? (path.endsWith("_scale") ? "1" : "")
+        input.placeholder = value == null ? ""
           : String(typeof value === "number" ? Number((value * scale).toPrecision(7)) : value);
       }
     }
