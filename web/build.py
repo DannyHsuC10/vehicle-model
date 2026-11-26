@@ -11,12 +11,13 @@ ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "web"
 LAB = ROOT / "Vehicle14DOFLab"
 DIST = ROOT / "dist" / "vehicle14dof"
+PUBLIC_TIRE = "input_data/tir/lp03-demo.mf61"
 SOLVER_FILES = (
     "__init__.py", "aero_setup.py", "geometry_tables.py", "lap.py", "model.py",
     "plots.py", "resources.py", "straight.py", "lp03.json",
     "input_data/LP03.json",
     "input_data/lp03_voltage_envelope.csv", "input_data/modal_aero.json",
-    "input_data/tir/Hoosier_43075_R20_W8_candidate.tir", "examples/skidpad.csv",
+    PUBLIC_TIRE, "examples/skidpad.csv",
 )
 
 
@@ -37,6 +38,10 @@ def main():
     from Vehicle14DOFLab.resources import SKIDPAD
     from Vehicle14DOFLab._vendor.pacejka.tir_io import read_tir, write_tir
 
+    vehicle = json.loads((LAB / "lp03.json").read_text(encoding="utf-8"))
+    if vehicle["tire_file"] != PUBLIC_TIRE:
+        raise ValueError("The web build only packages the public LP03 demo tire.")
+
     DIST.mkdir(parents=True, exist_ok=True)
     for name in ("index.html", "style.css", "app.js", "charts.js", "replay.js", "vehicle-settings.js", "worker.js"):
         copy2(WEB / name, DIST / name)
@@ -54,7 +59,6 @@ def main():
     }
     (DIST / "courses.json").write_text(json.dumps(courses, separators=(",", ":")), encoding="utf-8")
     copy2(SKIDPAD, DIST / "skidpad-example.csv")
-    vehicle = json.loads((LAB / "lp03.json").read_text(encoding="utf-8"))
     vehicle["aero"] = aero_settings(vehicle, LAB)
     suspension = json.loads((LAB / "input_data/LP03.json").read_text(encoding="utf-8-sig"))
     defaults = {"vehicle": vehicle, "suspension": suspension}
@@ -74,7 +78,7 @@ def main():
     ):
         (examples / name).write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    tire_source = LAB / vehicle["tire_file"]
+    tire_source = LAB / PUBLIC_TIRE
     tire_metadata = {("MDI_HEADER", "FILE_VERSION"), ("MODEL", "FITTYP")}
     blank_tire = {(section, key): 0 for section, parameters in read_tir(tire_source).sections.items()
                   for key, value in parameters.items()

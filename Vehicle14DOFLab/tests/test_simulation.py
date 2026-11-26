@@ -283,7 +283,7 @@ class LapTests(unittest.TestCase):
     def test_skidpad_wraps_and_times_a_dynamic_lap(self):
         vehicle = Vehicle14DOF()
         driver = Driver(self.track, vehicle.wheelbase)
-        self.assertAlmostEqual(max(driver.speed_profile)**2 / 9.125, 2.0 * 9.81)
+        self.assertAlmostEqual(max(driver.speed_profile)**2 / 9.125, 1.5 * 9.81)
         result = simulate_laps(vehicle, self.track, driver, time_limit=20.)
         self.assertEqual(len(result.lap_times), 1)
         self.assertGreater(result.lap_times[0], 5.)

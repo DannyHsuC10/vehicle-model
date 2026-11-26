@@ -1,6 +1,6 @@
 {
   "suspension_project": "input_data/LP03.json",
-  "tire_file": "input_data/tir/Hoosier_43075_R20_W8_candidate.tir",
+  "tire_file": "input_data/tir/lp03-demo.mf61",
   "motor_envelope": "input_data/lp03_voltage_envelope.csv",
   "aero": {
     "model": "modal",
