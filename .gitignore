@@ -10,3 +10,5 @@ dist/
 *.spec
 .test-output/
 .test-tmp/
+/Motor/**/*.[xX][lL][sS]
+/Motor/**/*.[xX][lL][sS][xXmMbB]
