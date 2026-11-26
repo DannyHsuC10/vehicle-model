@@ -14,7 +14,7 @@ DIST = ROOT / "dist" / "vehicle14dof"
 SOLVER_FILES = (
     "__init__.py", "aero_setup.py", "geometry_tables.py", "lap.py", "model.py",
     "plots.py", "resources.py", "straight.py", "lp03.json",
-    "input_data/LP03.json", "input_data/fsae_A_2025.csv",
+    "input_data/LP03.json",
     "input_data/lp03_voltage_envelope.csv", "input_data/modal_aero.json",
     "input_data/tir/Hoosier_43075_R20_W8_candidate.tir", "examples/skidpad.csv",
 )
@@ -23,10 +23,11 @@ SOLVER_FILES = (
 def main():
     sys.path.insert(0, str(ROOT))
     from Vehicle14DOFLab.lap import Track
-    from Vehicle14DOFLab.resources import DEFAULT_TRACK, SKIDPAD
+    from Vehicle14DOFLab.aero_setup import aero_settings
+    from Vehicle14DOFLab.resources import SKIDPAD
 
     DIST.mkdir(parents=True, exist_ok=True)
-    for name in ("index.html", "style.css", "app.js", "charts.js", "worker.js"):
+    for name in ("index.html", "style.css", "app.js", "charts.js", "replay.js", "vehicle-settings.js", "worker.js"):
         copy2(WEB / name, DIST / name)
     with ZipFile(DIST / "solver.zip", "w", ZIP_DEFLATED) as archive:
         for name in SOLVER_FILES:
@@ -35,14 +36,18 @@ def main():
             archive.write(path, path.relative_to(ROOT).as_posix())
         archive.write(LAB / "_vendor/pacejka/LICENSE", "Vehicle14DOFLab/_vendor/pacejka/LICENSE")
         archive.write(WEB / "browser_solver.py", "browser_solver.py")
-    guides = {}
-    for mode, path in (("lap", DEFAULT_TRACK), ("skidpad", SKIDPAD)):
-        track = Track.from_csv(path)
-        guides[mode] = {
-            "xy": [*track.xy.tolist(), track.xy[0].tolist()],
-            "length": float(track.length),
-        }
+    track = Track.from_csv(SKIDPAD)
+    guides = {
+        "skidpad": {"xy": [*track.xy.tolist(), track.xy[0].tolist()], "length": float(track.length)},
+        "straight": {"xy": [[0., 0.], [75., 0.]], "length": 75.},
+    }
     (DIST / "courses.json").write_text(json.dumps(guides, separators=(",", ":")), encoding="utf-8")
+    copy2(SKIDPAD, DIST / "skidpad-example.csv")
+    vehicle = json.loads((LAB / "lp03.json").read_text(encoding="utf-8"))
+    vehicle["aero"] = aero_settings(vehicle, LAB)
+    suspension = json.loads((LAB / "input_data/LP03.json").read_text(encoding="utf-8-sig"))
+    defaults = {"vehicle": vehicle, "suspension": suspension}
+    (DIST / "vehicle-defaults.json").write_text(json.dumps(defaults, ensure_ascii=False), encoding="utf-8")
     copy2(LAB / "_vendor/pacejka/LICENSE", DIST / "pacejka-license.txt")
     print(DIST)
 

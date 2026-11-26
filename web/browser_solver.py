@@ -2,6 +2,7 @@
 
 import csv
 import json
+import math
 from pathlib import Path
 from shutil import copyfile
 from tempfile import TemporaryDirectory
@@ -11,11 +12,12 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import numpy as np
 
 from Vehicle14DOFLab._vendor.suspension.engine import G
+from Vehicle14DOFLab._vendor.suspension.project import open_project
 from Vehicle14DOFLab.aero_setup import aero_settings
 from Vehicle14DOFLab.lap import Driver, Track, simulate_laps
 from Vehicle14DOFLab.model import DEFAULT_CONFIG, Vehicle14DOF
 from Vehicle14DOFLab.plots import write_plots
-from Vehicle14DOFLab.resources import DEFAULT_TRACK, SKIDPAD
+from Vehicle14DOFLab.resources import SKIDPAD
 from Vehicle14DOFLab.straight import simulate_straight
 
 
@@ -31,7 +33,8 @@ PLOT_COLUMNS = (
     "cop_x_m", "cop_y_m", "cop_z_m", "throttle", "brake",
 ) + tuple(
     f"{corner}_{name}"
-    for name in ("fz_n", "wheel_travel_mm", "slip_ratio", "slip_angle_deg", "drive_nm", "brake_nm")
+    for name in ("fz_n", "wheel_travel_mm", "slip_ratio", "slip_angle_deg", "drive_nm", "brake_nm",
+                 "steer_deg", "wheel_spin_rad", "rolling_radius_m", "camber_deg")
     for corner in ("FL", "FR", "RL", "RR")
 )
 
@@ -54,6 +57,29 @@ def write_csv(path, rows):
         writer.writerows(rows)
 
 
+def apply_settings(vehicle, suspension, overrides):
+    roots = {"vehicle": vehicle, "suspension": suspension}
+    curve_scales = {"spring_scale": ("spring",), "damper_scale": ("compression", "rebound"), "mr_scale": ("mr",)}
+    for key, value in overrides.items():
+        group, *parts = key.split(".")
+        target = roots[group]
+        for part in parts[:-1]:
+            target = target[int(part)] if isinstance(target, list) else target[part]
+        name = int(parts[-1]) if isinstance(target, list) else parts[-1]
+        if parts[:1] == ["channels"] and name in curve_scales:
+            if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+                raise ValueError("懸吊倍率須為有限正數。")
+            for curve in curve_scales[name]:
+                if curve in target:
+                    target[curve] = [[x, y * value] for x, y in target[curve]]
+            if name == "spring_scale":
+                for rate in ("main_rate", "tender_rate"):
+                    if rate in target:
+                        target[rate] *= value
+        else:
+            target[name] = value
+
+
 def snapshot(inputs, uploaded, overrides):
     defaults = read_json(DEFAULT_CONFIG)
     config = defaults | (read_json(uploaded["vehicle"]) if "vehicle" in uploaded else {})
@@ -71,13 +97,13 @@ def snapshot(inputs, uploaded, overrides):
         config["aero"] = aero
     config["aero"] = aero_settings(config, inputs)
     config.pop("aero_file", None)
-    for key in ("dc_voltage", "gear_ratio"):
-        if key in overrides:
-            config[key] = overrides[key]
-    if "mass_kg" in overrides:
-        suspension_file = inputs / config["suspension_project"]
-        suspension = read_json(suspension_file)
-        suspension["vehicle"]["m"] = overrides["mass_kg"]
+    suspension_file = inputs / UPLOADS["suspension"]
+    if overrides:
+        suspension, _ = open_project(suspension_file)
+        apply_settings(config, suspension, overrides)
+        for key, kind in PROFILE_INPUTS.items():
+            config[key] = UPLOADS[kind]
+        config.pop("aero_file", None)
         write_json(suspension_file, suspension)
     path = inputs / "vehicle.json"
     write_json(path, config)
@@ -92,8 +118,10 @@ def run(payload, progress, working_directory):
         for key, name in UPLOADS.items() if (working_directory / "uploads" / name).is_file()
     }
     mode = options["mode"]
-    if mode not in ("lap", "skidpad", "straight"):
+    if mode not in ("custom", "skidpad", "straight"):
         raise ValueError("請選擇有效的工況。")
+    if mode == "custom" and "track" not in uploaded:
+        raise ValueError("請匯入自訂賽道 CSV。")
 
     with TemporaryDirectory() as staging:
         run_dir = Path(staging)
@@ -102,11 +130,11 @@ def run(payload, progress, working_directory):
         vehicle = Vehicle14DOF(snapshot(inputs, uploaded, options.get("overrides", {})))
         track = None
         if mode == "straight":
-            length = options["length"]
+            length = 75.
             centerline = np.array([[0., 0.], [length, 0.]])
-            case_name = f"{length:g} m straight"
+            case_name = f"{length:g} m 直線加速"
         else:
-            track_input = SKIDPAD if mode == "skidpad" else uploaded.get("track", DEFAULT_TRACK)
+            track_input = SKIDPAD if mode == "skidpad" else uploaded["track"]
             copyfile(track_input, inputs / "track.csv")
             track = Track.from_csv(inputs / "track.csv", width=options["width"])
             length = float(track.length)
@@ -165,5 +193,10 @@ def run(payload, progress, working_directory):
         return json.dumps({
             "mode": mode, "courseName": case_name, "length": length, "centerline": centerline.tolist(),
             "times": times, "timing": timing, "deviation": float(deviation), "warmupEnd": map_start,
+            "geometry": {
+                "axles": np.column_stack((vehicle.wheel_x, vehicle.wheel_y)).tolist(),
+                "radius": vehicle.radius, "cgHeight": vehicle.height,
+                "roadWidth": options.get("width", 3.),
+            },
             "series": {key: [float(row[key]) for row in rows] for key in PLOT_COLUMNS},
         }, allow_nan=False, separators=(",", ":"))

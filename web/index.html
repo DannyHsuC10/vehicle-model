@@ -26,38 +26,24 @@
           <fieldset class="mode">
             <legend>工況</legend>
             <div class="segments">
-              <label><input type="radio" name="mode" value="lap" checked><span>圈速</span></label>
-              <label><input type="radio" name="mode" value="skidpad"><span>定圓</span></label>
+              <label><input type="radio" name="mode" value="skidpad" checked><span>定圓</span></label>
               <label><input type="radio" name="mode" value="straight"><span>加速</span></label>
+              <label><input type="radio" name="mode" value="custom"><span>匯入賽道</span></label>
             </div>
           </fieldset>
-          <div class="course-tile"><span class="course-symbol" aria-hidden="true">⌖</span><div><strong id="course-name">FSAE A 2025</strong><small id="course-meta">封閉賽道</small></div></div>
+          <div class="course-tile"><span class="course-symbol" aria-hidden="true">⌖</span><div><strong id="course-name">9.125 m 定圓</strong><small id="course-meta">固定半徑</small></div></div>
+          <div class="files track-import" id="track-import" hidden>
+            <label>封閉 LINE／ARC 賽道 CSV<input type="file" name="track" accept=".csv" required disabled></label>
+          </div>
+          <a class="example-link" href="./skidpad-example.csv" download>下載 9.125 m 定圓範例 CSV</a>
           <div class="field-grid">
             <label data-closed>賽道寬度<span class="input-unit"><input name="width" type="number" min=".01" step="any" value="3" required><span>m</span></span></label>
             <label data-closed>目標車速<span class="input-unit"><input name="speed" type="number" min=".01" step="any" value="100" required><span>km/h</span></span></label>
-            <label data-straight hidden>直線距離<span class="input-unit"><input name="length" type="number" min=".01" step="any" value="75" required disabled><span>m</span></span></label>
             <label>起步車速<span class="input-unit"><input name="initial" type="number" min="0" step="any" value="0" required><span>km/h</span></span></label>
             <label data-closed>側向加速度目標<span class="input-unit"><input name="lateral" type="number" min=".01" step="any" value="2" required><span>g</span></span></label>
             <label data-closed>計時圈數<span class="input-unit"><input name="laps" type="number" min="1" step="1" value="1" required><span>圈</span></span></label>
             <label data-closed>暖胎圈數<span class="input-unit"><input name="warmup" type="number" min="0" step="1" value="0" required><span>圈</span></span></label>
           </div>
-          <details>
-            <summary>車輛參數與輸入檔</summary>
-            <div class="field-grid advanced">
-              <label>整車質量<span class="input-unit"><input name="mass_kg" type="number" min="1" step="any" placeholder="320"><span>kg</span></span></label>
-              <label>匯流排電壓<span class="input-unit"><input name="dc_voltage" type="number" min="1" step="any" placeholder="530"><span>V</span></span></label>
-              <label>減速比<span class="input-unit"><input name="gear_ratio" type="number" min=".01" step="any" placeholder="11.2"></span></label>
-            </div>
-            <p class="field-note">空白欄位沿用匯入檔或 LP03 預設值。</p>
-            <div class="files">
-              <label data-lap>賽道 LINE／ARC CSV<input type="file" name="track" accept=".csv"></label>
-              <label>車輛設定 JSON<input type="file" name="vehicle" accept=".json"></label>
-              <label>懸吊專案 JSON<input type="file" name="suspension" accept=".json"></label>
-              <label>輪胎 TIR<input type="file" name="tire" accept=".tir"></label>
-              <label>馬達曲線 CSV<input type="file" name="motor" accept=".csv"></label>
-              <label>空力係數 JSON<input type="file" name="aero" accept=".json"></label>
-            </div>
-          </details>
           <details>
             <summary>積分設定</summary>
             <div class="field-grid advanced">
@@ -71,6 +57,21 @@
           </div>
           <progress id="progress" max="100" value="0" aria-label="模擬進度"></progress>
           <p id="status" class="status" role="status">就緒 · 在瀏覽器執行</p>
+          <section class="vehicle-settings" aria-labelledby="vehicle-heading">
+            <h2 id="vehicle-heading">車輛設定</h2>
+            <p class="field-note">留空會沿用匯入檔或 LP03 預設值。</p>
+            <div id="vehicle-fields"></div>
+            <details>
+              <summary>匯入設定與曲線</summary>
+              <div class="files">
+                <label>車輛設定 JSON<input type="file" name="vehicle" accept=".json"></label>
+                <label>懸吊專案 JSON<input type="file" name="suspension" accept=".json"></label>
+                <label>輪胎 TIR<input type="file" name="tire" accept=".tir"></label>
+                <label>馬達曲線 CSV<input type="file" name="motor" accept=".csv"></label>
+                <label>空力係數 JSON<input type="file" name="aero" accept=".json"></label>
+              </div>
+            </details>
+          </section>
         </form>
       </aside>
       <section class="results" aria-label="模擬結果">
@@ -80,15 +81,35 @@
           <div class="metric panel"><span>峰值側向加速度</span><strong id="peak-lateral">—</strong><small>g</small></div>
           <div class="metric panel"><span>工況距離</span><strong id="distance">—</strong><small>m</small></div>
         </div>
-        <section class="map panel">
-          <div class="section-heading"><div><h2>行駛軌跡</h2><p id="map-caption">FSAE A 2025 · 賽道預覽</p></div><span class="map-tag">俯視</span></div>
-          <div class="map-frame"><canvas id="map" role="img" aria-label="賽道中心線與車輛行駛軌跡"></canvas></div>
-          <div id="map-legend" class="map-legend"><span class="legend-line"></span>賽道中心線 <span class="start-dot"></span>起點<div id="speed-key" hidden><span id="min-speed">0</span><i></i><span id="max-speed">100</span> km/h</div></div>
+        <section class="replay panel" id="replay" hidden>
+          <div class="section-heading"><h2>駕駛回放</h2><output id="replay-speed">0.0 km/h</output></div>
+          <div class="replay-layout">
+            <div class="replay-scene"><canvas id="vehicle-scene" role="img" aria-label="隨遙測移動的立體方程式賽車"></canvas></div>
+            <div class="replay-instruments">
+              <div class="gg-panel">
+                <h3>G-G 加速度圓</h3>
+                <canvas id="gg-diagram" role="img" aria-label="縱向與側向加速度軌跡"></canvas>
+                <div class="gg-values"><span>縱向 <output id="replay-ax">0.00 g</output></span><span>側向 <output id="replay-ay">0.00 g</output></span></div>
+              </div>
+              <label class="pedal">油門 <output id="throttle-value">0%</output><meter id="throttle" min="0" max="1" value="0" aria-label="油門"></meter></label>
+              <label class="pedal braking">煞車 <output id="brake-value">0%</output><meter id="brake" min="0" max="1" value="0" aria-label="煞車"></meter></label>
+            </div>
+          </div>
           <div class="playback">
-            <button id="play" type="button" disabled>播放</button>
-            <input id="scrub" type="range" min="0" max="1" value="0" step="1" aria-label="回放時間軸" disabled>
+            <button id="play" type="button">播放</button>
+            <button id="restart" type="button">回起點</button>
+            <label class="sr-only" for="camera">回放視角</label>
+            <select id="camera"><option value="follow">跟車</option><option value="overhead">俯視</option></select>
+            <label class="sr-only" for="play-rate">播放倍率</label>
+            <select id="play-rate"><option value=".25">0.25×</option><option value=".5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
+            <input id="scrub" type="range" min="0" max="1" value="0" step="1" aria-label="回放時間軸">
             <output id="play-time" for="scrub">0.00 s</output>
           </div>
+        </section>
+        <section class="map panel">
+          <div class="section-heading"><div><h2>行駛軌跡</h2><p id="map-caption">9.125 m 定圓 · 賽道預覽</p></div><span class="map-tag">俯視</span></div>
+          <div class="map-frame"><canvas id="map" role="img" aria-label="賽道中心線與車輛行駛軌跡"></canvas></div>
+          <div id="map-legend" class="map-legend"><span class="legend-line"></span>賽道中心線 <span class="start-dot"></span>起點<div id="speed-key" hidden><span id="min-speed">0</span><i></i><span id="max-speed">100</span> km/h</div></div>
         </section>
         <section class="chart panel">
           <div class="section-heading"><h2>遙測分析</h2><label class="sr-only" for="signal">遙測項目</label>

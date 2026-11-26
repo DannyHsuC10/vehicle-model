@@ -1,22 +1,25 @@
 import { extent, routeView, timeView } from "./charts.js";
+import { replayView } from "./replay.js";
+import { setupVehicleSettings } from "./vehicle-settings.js";
 
 const byId = id => document.getElementById(id);
 const form = byId("setup");
 const field = name => form.elements.namedItem(name);
 const modes = {
-  lap: { name: "FSAE A 2025", description: "封閉賽道", fields: { initial: 0, lateral: 2, warmup: 0 } },
   skidpad: { name: "9.125 m 定圓", description: "固定半徑", fields: { initial: 25.2, lateral: 5.5 / 9.81, warmup: 1 } },
-  straight: { name: "直線全油門", description: "直線加速", fields: { initial: 0 } },
+  straight: { name: "75 m 直線加速", description: "全油門", fields: { initial: 0 } },
+  custom: { name: "自訂賽道", description: "匯入封閉 LINE／ARC CSV", fields: { initial: 0, lateral: 5.5 / 9.81, warmup: 0 } },
 };
 const fileFields = ["vehicle", "suspension", "tire", "motor", "track", "aero"];
-const overrides = ["mass_kg", "dc_voltage", "gear_ratio"];
+const vehicleSettings = setupVehicleSettings(byId("vehicle-fields"), form);
 const progress = byId("progress");
 const paintRoute = routeView(byId("map"));
 const paintTime = timeView(byId("chart"), byId("chart-legend"));
+const paintReplay = replayView(byId("vehicle-scene"), byId("gg-diagram"));
 const emptyCourse = [];
-let guides = {};
+let guides = { straight: { xy: [[0, 0], [75, 0]], length: 75 } };
 let guide = emptyCourse;
-let selectedMode = "lap";
+let selectedMode = "skidpad";
 let modeFields = {};
 let activeJob;
 let worker;
@@ -45,21 +48,20 @@ function toggleFields(selector, show) {
 }
 
 function courseName(mode) {
-  return mode === "lap" && field("track").files[0]
+  return mode === "custom" && field("track").files[0]
     ? field("track").files[0].name : modes[mode].name;
 }
 
 function updateCourse() {
   const mode = selectedMode;
-  const custom = mode === "lap" && !!field("track").files[0];
-  const length = mode === "straight" ? field("length").valueAsNumber : guides[mode]?.length;
-  guide = mode === "straight" && length > 0 ? [[0, 0], [length, 0]] : custom ? emptyCourse : guides[mode]?.xy || emptyCourse;
+  const length = guides[mode]?.length;
+  guide = guides[mode]?.xy || emptyCourse;
   byId("course-name").textContent = courseName(mode);
-  byId("course-meta").textContent = !custom && length > 0
+  byId("course-meta").textContent = length > 0
     ? `${modes[mode].description} · ${length.toFixed(2)} m` : modes[mode].description;
   if (!result) {
     byId("timing-label").textContent = mode === "straight" ? "加速時間" : "最佳圈速";
-    byId("distance").textContent = !custom && length > 0 ? length.toFixed(2) : "—";
+    byId("distance").textContent = length > 0 ? length.toFixed(2) : "—";
     byId("map-caption").textContent = `${courseName(mode)} · 賽道預覽`;
     byId("map-legend").hidden = !guide.length;
     redraw();
@@ -73,20 +75,28 @@ function selectMode(mode, restore = true) {
   selectedMode = mode;
   for (const [key, value] of Object.entries(modeFields[mode] || modes[mode].fields)) field(key).value = value;
   toggleFields("[data-closed]", mode !== "straight");
-  toggleFields("[data-straight]", mode === "straight");
-  toggleFields("[data-lap]", mode === "lap");
+  byId("track-import").hidden = field("track").disabled = mode !== "custom";
   updateCourse();
 }
 
 function redraw() {
   paintRoute(result?.centerline || guide, result?.series, cursor);
   paintTime(`${revision}:${byId("signal").value}`, result?.series, byId("signal").value, cursor, result?.warmupEnd);
+  paintReplay(result, cursor, byId("camera").value === "overhead");
 }
 
 function seek(index) {
   cursor = index;
   byId("scrub").value = index;
   byId("play-time").textContent = `${result.series.time_s[index].toFixed(2)} s`;
+  const series = result.series;
+  byId("replay-speed").textContent = `${(series.speed_mps[index] * 3.6).toFixed(1)} km/h`;
+  byId("replay-ax").textContent = `${(series.ax_mps2[index] / 9.81).toFixed(2)} g`;
+  byId("replay-ay").textContent = `${(series.ay_mps2[index] / 9.81).toFixed(2)} g`;
+  for (const pedal of ["throttle", "brake"]) {
+    byId(pedal).value = series[pedal][index];
+    byId(`${pedal}-value`).textContent = `${(100 * series[pedal][index]).toFixed(0)}%`;
+  }
   redraw();
 }
 
@@ -100,11 +110,11 @@ function play() {
   if (animation) return pause();
   const times = result.series.time_s;
   if (cursor === times.length - 1) seek(0);
-  const startTime = times[cursor], started = performance.now();
+  const startTime = times[cursor], started = performance.now(), rate = Number(byId("play-rate").value);
   let index = cursor;
   byId("play").textContent = "暫停";
   function tick(now) {
-    const time = startTime + (now - started) / 1000;
+    const time = startTime + rate * (now - started) / 1000;
     while (index + 1 < times.length && times[index + 1] <= time) index++;
     if (cursor !== index) seek(index);
     if (index < times.length - 1) animation = requestAnimationFrame(tick);
@@ -141,7 +151,7 @@ function showResult(data, downloads) {
   byId("max-speed").textContent = (3.6 * fastest).toFixed(1);
   byId("map-legend").hidden = byId("speed-key").hidden = false;
   byId("chart-empty").hidden = true;
-  byId("play").disabled = byId("scrub").disabled = byId("signal").disabled = false;
+  byId("replay").hidden = byId("signal").disabled = false;
   byId("scrub").max = data.series.time_s.length - 1;
   byId("timing-head").replaceChildren(tableRow(straight
     ? ["距離 (m)", "時間 (s)", "終速 (km/h)"] : ["計時圈", "圈速 (s)", "起點 (s)", "終點 (s)"], "th"));
@@ -159,6 +169,7 @@ function showResult(data, downloads) {
   }
   byId("exports").hidden = false;
   seek(0);
+  if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) play();
 }
 
 function finish(message, tone) {
@@ -198,10 +209,9 @@ form.addEventListener("submit", async event => {
   event.preventDefault();
   if (activeJob) return;
   const mode = selectedMode;
-  const job = { mode, courseName: courseName(mode), overrides: {} };
+  const job = { mode, courseName: courseName(mode), overrides: vehicleSettings() };
   for (const key of ["initial", "step", "limit", ...(mode === "straight"
-    ? ["length"] : ["width", "speed", "lateral", "laps", "warmup"])]) job[key] = field(key).valueAsNumber;
-  for (const key of overrides) if (field(key).value !== "") job.overrides[key] = field(key).valueAsNumber;
+    ? [] : ["width", "speed", "lateral", "laps", "warmup"])]) job[key] = field(key).valueAsNumber;
   activeJob = job;
   updateBusy(true);
   progress.value = 0;
@@ -222,18 +232,18 @@ form.addEventListener("submit", async event => {
 });
 
 form.addEventListener("invalid", event => {
-  const details = event.target.closest("details");
-  if (details) details.open = true;
+  for (let details = event.target.closest("details"); details; details = details.parentElement.closest("details")) {
+    details.open = true;
+  }
 }, true);
 form.addEventListener("change", event => {
   if (event.target.name === "mode") selectMode(event.target.value);
   if (event.target.name === "track") updateCourse();
 });
-field("length").addEventListener("input", updateCourse);
 byId("reset").addEventListener("click", () => {
   form.reset();
   modeFields = {};
-  selectMode("lap", false);
+  selectMode("skidpad", false);
   progress.value = result ? 100 : 0;
   status("已重設模擬設定");
 });
@@ -244,6 +254,11 @@ byId("stop").addEventListener("click", () => {
 });
 byId("signal").addEventListener("change", redraw);
 byId("play").addEventListener("click", play);
+byId("restart").addEventListener("click", () => { pause(); seek(0); });
+byId("camera").addEventListener("change", redraw);
+byId("play-rate").addEventListener("change", () => {
+  if (animation) { pause(); play(); }
+});
 byId("scrub").addEventListener("input", event => {
   pause();
   seek(Number(event.target.value));
@@ -252,6 +267,8 @@ byId("scrub").addEventListener("input", event => {
 const resize = new ResizeObserver(redraw);
 resize.observe(byId("map").parentElement);
 resize.observe(byId("chart").parentElement);
+resize.observe(byId("vehicle-scene").parentElement);
+resize.observe(byId("gg-diagram"));
 selectMode(field("mode").value, false);
 fetch(new URL("./courses.json", import.meta.url)).then(response => {
   if (!response.ok) throw new Error("賽道預覽載入失敗。");
